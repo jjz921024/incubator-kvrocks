@@ -19,10 +19,16 @@ include_guard()
 
 include(cmake/utils.cmake)
 
-FetchContent_DeclareGitHubWithMirror(libevent
-  libevent/libevent release-2.1.11-stable
-  MD5=b3185885cad72a4fc2f2d2194dfee2cc
-)
+if(NOT EXISTS ${PROJECT_BINARY_DIR}/libevent-src)
+  FetchContent_DeclareGitHubWithMirror(libevent
+    libevent/libevent release-2.1.11-stable
+    MD5=b3185885cad72a4fc2f2d2194dfee2cc
+  )
+else()
+ FetchContent_Declare(libevent
+    SOURCE_DIR ${PROJECT_BINARY_DIR}/libevent-src
+  )
+endif() 
 
 FetchContent_MakeAvailableWithArgs(libevent
   EVENT__DISABLE_TESTS=ON

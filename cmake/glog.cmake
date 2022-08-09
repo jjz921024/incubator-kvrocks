@@ -19,10 +19,16 @@ include_guard()
 
 include(cmake/utils.cmake)
 
-FetchContent_DeclareGitHubWithMirror(glog
-  google/glog v0.6.0
-  MD5=1b246d4d0e8a011d33e0813b256198ef
-)
+if(NOT EXISTS ${PROJECT_BINARY_DIR}/glog-src)
+  FetchContent_DeclareGitHubWithMirror(glog
+    google/glog v0.6.0
+    MD5=1b246d4d0e8a011d33e0813b256198ef
+  )
+else()
+ FetchContent_Declare(glog
+    SOURCE_DIR ${PROJECT_BINARY_DIR}/glog-src
+  )
+endif() 
 
 FetchContent_MakeAvailableWithArgs(glog
   WITH_GFLAGS=OFF

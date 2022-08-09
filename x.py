@@ -20,12 +20,17 @@
 from argparse import ArgumentParser, ArgumentDefaultsHelpFormatter, REMAINDER
 from glob import glob
 from os import makedirs
+import os
 from pathlib import Path
 import re
+import string
 from subprocess import Popen, PIPE
 import sys
 from typing import List, Any, Optional, TextIO, Tuple
 from shutil import copyfile
+
+import urllib.request
+import zipfile
 
 CMAKE_REQUIRE_VERSION = (3, 13, 0)
 TCL_REQUIRE_VERSION = (8, 5, 0)
@@ -222,6 +227,33 @@ def test_tcl(dir: str, rest: List[str]) -> None:
         cwd=str(tcldir), verbose=True
     )
 
+def download() -> None:
+    deps_urls = {
+        "glog.zip": "https://github.com/google/glog/archive/v0.6.0.zip", 
+        "gtest.zip": "https://github.com/google/googletest/archive/release-1.11.0.zip",
+        "jemalloc.zip": "https://github.com/jemalloc/jemalloc/archive/12cd13cd418512d9e7596921ccdb62e25a103f87.zip",
+        "libevent.zip": "https://github.com/libevent/libevent/archive/release-2.1.11-stable.zip",
+        "lua.zip": "https://github.com/KvrocksLabs/lua/archive/c8e4bbfa25f7202f3b778ccb88e54ab84a1861fb.zip",
+        "luajit.zip": "https://github.com/KvrocksLabs/LuaJIT/archive/b80ea0e44bd259646d988324619612f645e4b637.zip",
+        "lz4.zip": "https://github.com/lz4/lz4/archive/v1.9.3.zip",
+        "rocksdb.zip": "https://github.com/facebook/rocksdb/archive/v6.29.5.zip",
+        "snappy.zip": "https://github.com/google/snappy/archive/1.1.9.zip"
+    }
+
+    for name, url in deps_urls.items():
+        filename = "build/" + name + ".zip"
+        try:
+            print("download {}...".format(name))
+            urllib.request.urlretrieve(url, filename)
+        except Exception as e:
+            print("Error occurred when downloading file {}, error message:{}".format(name, e))
+
+        with zipfile.ZipFile(filename) as zip_f:
+            print("extract {}...".format(name))
+            zip_f.extractall(path="build/" + name + "-src")
+
+        os.remove(filename)
+
 if __name__ == '__main__':
     parser = ArgumentParser(formatter_class=ArgumentDefaultsHelpFormatter)
     parser.set_defaults(func=parser.print_help)
@@ -305,6 +337,14 @@ if __name__ == '__main__':
     parser_test_tcl.add_argument('dir', metavar='BUILD_DIR', nargs='?', default='build', help="directory including kvrocks build files")
     parser_test_tcl.add_argument('rest', nargs=REMAINDER, help="the rest of arguments to forward to TCL scripts")
     parser_test_tcl.set_defaults(func=test_tcl)
+
+    parser_download = subparsers.add_parser(
+        'download',
+        description="Download all the third denpendency",
+        help="Download all the third denpendency",
+        formatter_class=ArgumentDefaultsHelpFormatter,
+    )
+    parser_download.set_defaults(func=download)
 
     args = parser.parse_args()
 

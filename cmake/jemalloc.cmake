@@ -19,10 +19,16 @@ include_guard()
 
 include(cmake/utils.cmake)
 
-FetchContent_DeclareGitHubWithMirror(jemalloc
-  jemalloc/jemalloc 12cd13cd418512d9e7596921ccdb62e25a103f87
-  MD5=5df60c70718ba94253cb15d60e69e2f8
-)
+if(NOT EXISTS ${PROJECT_BINARY_DIR}/jemalloc-src)
+  FetchContent_DeclareGitHubWithMirror(jemalloc
+    jemalloc/jemalloc 12cd13cd418512d9e7596921ccdb62e25a103f87
+    MD5=5df60c70718ba94253cb15d60e69e2f8
+  )
+else()
+ FetchContent_Declare(jemalloc
+    SOURCE_DIR ${PROJECT_BINARY_DIR}/jemalloc-src
+  )
+endif() 
 
 FetchContent_GetProperties(jemalloc)
 if(NOT jemalloc_POPULATED)

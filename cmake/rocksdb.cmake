@@ -25,10 +25,16 @@ endif()
 
 include(cmake/utils.cmake)
 
-FetchContent_DeclareGitHubWithMirror(rocksdb
-  facebook/rocksdb v6.29.5
-  MD5=b7efb227f10a668adcb914c973f19648
-)
+if(NOT EXISTS ${PROJECT_BINARY_DIR}/rocksdb-src)
+  FetchContent_DeclareGitHubWithMirror(rocksdb
+    facebook/rocksdb v6.29.5
+    MD5=b7efb227f10a668adcb914c973f19648
+  )
+else()
+ FetchContent_Declare(rocksdb
+    SOURCE_DIR ${PROJECT_BINARY_DIR}/rocksdb-src
+  )
+endif()
 
 FetchContent_GetProperties(jemalloc)
 FetchContent_GetProperties(snappy)

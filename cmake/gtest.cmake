@@ -19,10 +19,16 @@ include_guard()
 
 include(cmake/utils.cmake)
 
-FetchContent_DeclareGitHubWithMirror(gtest
-  google/googletest release-1.11.0
-  MD5=52943a59cefce0ae0491d4d2412c120b
-)
+if(NOT EXISTS ${PROJECT_BINARY_DIR}/gtest-src)
+  FetchContent_DeclareGitHubWithMirror(gtest
+    google/googletest release-1.11.0
+    MD5=52943a59cefce0ae0491d4d2412c120b
+  )
+else()
+ FetchContent_Declare(gtest
+    SOURCE_DIR ${PROJECT_BINARY_DIR}/gtest-src
+  )
+endif() 
 
 FetchContent_MakeAvailableWithArgs(gtest
   BUILD_GMOCK=OFF

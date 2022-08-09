@@ -19,10 +19,16 @@ include_guard()
 
 include(cmake/utils.cmake)
 
-FetchContent_DeclareGitHubWithMirror(luajit
-  KvrocksLabs/LuaJIT b80ea0e44bd259646d988324619612f645e4b637
-  MD5=f9566c424fb57b226066e3a39a10ec8d
-)
+if(NOT EXISTS ${PROJECT_BINARY_DIR}/luajit-src)
+  FetchContent_DeclareGitHubWithMirror(luajit
+    KvrocksLabs/LuaJIT b80ea0e44bd259646d988324619612f645e4b637
+    MD5=f9566c424fb57b226066e3a39a10ec8d
+  )
+else()
+ FetchContent_Declare(luajit
+    SOURCE_DIR ${PROJECT_BINARY_DIR}/luajit-src
+  )
+endif()
 
 FetchContent_GetProperties(luajit)
 if(NOT lua_POPULATED)
