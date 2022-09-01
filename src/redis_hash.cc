@@ -170,14 +170,14 @@ rocksdb::Status Hash::Set(const Slice &user_key, const Slice &field, const Slice
   FieldValue fv = {field.ToString(), value.ToString()};
   std::vector<FieldValue> fvs;
   fvs.emplace_back(std::move(fv));
-  return MSet(user_key, fvs, false, ret);
+  return MSet(user_key, fvs, false, -1, ret);
 }
 
 rocksdb::Status Hash::SetNX(const Slice &user_key, const Slice &field, Slice value, int *ret) {
   FieldValue fv = {field.ToString(), value.ToString()};
   std::vector<FieldValue> fvs;
   fvs.emplace_back(std::move(fv));
-  return MSet(user_key, fvs, true, ret);
+  return MSet(user_key, fvs, true, -1, ret);
 }
 
 rocksdb::Status Hash::Delete(const Slice &user_key, const std::vector<Slice> &fields, int *ret) {
@@ -212,7 +212,7 @@ rocksdb::Status Hash::Delete(const Slice &user_key, const std::vector<Slice> &fi
   return storage_->Write(rocksdb::WriteOptions(), &batch);
 }
 
-rocksdb::Status Hash::MSet(const Slice &user_key, const std::vector<FieldValue> &field_values, bool nx, int *ret) {
+rocksdb::Status Hash::MSet(const Slice &user_key, const std::vector<FieldValue> &field_values, bool nx, int ttl, int *ret) {
   *ret = 0;
   std::string ns_key;
   AppendNamespacePrefix(user_key, &ns_key);
@@ -221,6 +221,12 @@ rocksdb::Status Hash::MSet(const Slice &user_key, const std::vector<FieldValue> 
   HashMetadata metadata;
   rocksdb::Status s = GetMetadata(ns_key, &metadata);
   if (!s.ok() && !s.IsNotFound()) return s;
+
+  if (ttl > 0) {
+    int64_t now;
+    rocksdb::Env::Default()->GetCurrentTime(&now);
+    metadata.expire = now + ttl;
+  }
 
   int added = 0;
   bool exists = false;

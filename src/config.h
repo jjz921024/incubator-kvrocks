@@ -91,6 +91,7 @@ struct Config{
   int migrate_speed;
   int pipeline_size;
   int sequence_gap;
+  int global_ttl;
 
   // profiling
   int profiling_sample_ratio = 0;

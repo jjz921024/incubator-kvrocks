@@ -109,6 +109,7 @@ Config::Config() {
       {"migrate-speed", false, new IntField(&migrate_speed, 4096, 0, INT_MAX)},
       {"migrate-pipeline-size", false, new IntField(&pipeline_size, 16, 1, INT_MAX)},
       {"migrate-sequence-gap", false, new IntField(&sequence_gap, 10000, 1, INT_MAX)},
+      {"global-ttl", false, new IntField(&global_ttl, 604800, -1, INT_MAX)},
 
       /* rocksdb options */
       {"rocksdb.compression", false, new EnumField(&RocksDB.compression, compression_type_enum, 0)},
@@ -334,6 +335,11 @@ void Config::initFieldCallback() {
       {"migrate-sequence-gap", [this](Server* srv, const std::string &k, const std::string& v)->Status {
         if (!srv) return Status::OK();
         srv->slot_migrate_->SetSequenceGapSize(sequence_gap);
+        return Status::OK();
+      }},
+      {"global-ttl", [this](Server* srv, const std::string &k, const std::string& v)->Status {
+        if (!srv) return Status::OK();
+        srv->GetConfig()->global_ttl = global_ttl;
         return Status::OK();
       }},
       {"rocksdb.target_file_size_base", [this](Server* srv, const std::string &k, const std::string& v)->Status {

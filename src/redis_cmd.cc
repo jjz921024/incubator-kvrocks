@@ -1266,7 +1266,8 @@ class CommandHMSet : public Commander {
     for (unsigned int i = 2; i < args_.size(); i += 2) {
       field_values.emplace_back(FieldValue{args_[i], args_[i + 1]});
     }
-    rocksdb::Status s = hash_db.MSet(args_[1], field_values, false, &ret);
+    Config *config = svr->GetConfig();
+    rocksdb::Status s = hash_db.MSet(args_[1], field_values, false, config->global_ttl, &ret);
     if (!s.ok()) {
       return Status(Status::RedisExecErr, s.ToString());
     }
