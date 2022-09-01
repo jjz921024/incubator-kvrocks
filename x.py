@@ -23,6 +23,7 @@ from os import makedirs
 import os
 from pathlib import Path
 import re
+import shutil
 import string
 from subprocess import Popen, PIPE
 import sys
@@ -72,7 +73,7 @@ def run(*args: str, msg: Optional[str]=None, verbose: bool=False, **kwargs: Any)
     return p
 
 def run_pipe(*args: str, msg: Optional[str]=None, verbose: bool=False, **kwargs: Any) -> TextIO:
-    p = run(*args, msg=msg, verbose=verbose, stdout=PIPE, text=True, **kwargs)
+    p = run(*args, msg=msg, verbose=verbose, stdout=PIPE, universal_newlines=True, **kwargs)
     return p.stdout # type: ignore
 
 def find_command(command: str, msg: Optional[str]=None) -> str:
@@ -229,30 +230,37 @@ def test_tcl(dir: str, rest: List[str]) -> None:
 
 def download() -> None:
     deps_urls = {
-        "glog.zip": "https://github.com/google/glog/archive/v0.6.0.zip", 
-        "gtest.zip": "https://github.com/google/googletest/archive/release-1.11.0.zip",
-        "jemalloc.zip": "https://github.com/jemalloc/jemalloc/archive/12cd13cd418512d9e7596921ccdb62e25a103f87.zip",
-        "libevent.zip": "https://github.com/libevent/libevent/archive/release-2.1.11-stable.zip",
-        "lua.zip": "https://github.com/KvrocksLabs/lua/archive/c8e4bbfa25f7202f3b778ccb88e54ab84a1861fb.zip",
-        "luajit.zip": "https://github.com/KvrocksLabs/LuaJIT/archive/b80ea0e44bd259646d988324619612f645e4b637.zip",
-        "lz4.zip": "https://github.com/lz4/lz4/archive/v1.9.3.zip",
-        "rocksdb.zip": "https://github.com/facebook/rocksdb/archive/v6.29.5.zip",
-        "snappy.zip": "https://github.com/google/snappy/archive/1.1.9.zip"
+        "glog": "https://github.com/google/glog/archive/v0.6.0.zip", 
+        "gtest": "https://github.com/google/googletest/archive/release-1.11.0.zip",
+        "jemalloc": "https://github.com/jemalloc/jemalloc/archive/12cd13cd418512d9e7596921ccdb62e25a103f87.zip",
+        "libevent": "https://github.com/libevent/libevent/archive/release-2.1.11-stable.zip",
+        "lua": "https://github.com/KvrocksLabs/lua/archive/c8e4bbfa25f7202f3b778ccb88e54ab84a1861fb.zip",
+        "luajit": "https://github.com/KvrocksLabs/LuaJIT/archive/b80ea0e44bd259646d988324619612f645e4b637.zip",
+        "lz4": "https://github.com/lz4/lz4/archive/v1.9.3.zip",
+        "rocksdb": "https://github.com/facebook/rocksdb/archive/v6.29.5.zip",
+        "snappy": "https://github.com/google/snappy/archive/1.1.9.zip"
     }
 
+    if not os.path.exists("build"):
+        os.mkdir("build")
+
     for name, url in deps_urls.items():
-        filename = "build/" + name + ".zip"
-        try:
-            print("download {}...".format(name))
-            urllib.request.urlretrieve(url, filename)
-        except Exception as e:
-            print("Error occurred when downloading file {}, error message:{}".format(name, e))
+        zipFileName = "build/" + name + ".zip"
+        sourcePath = "build/" + name + "-src/"
 
-        with zipfile.ZipFile(filename) as zip_f:
-            print("extract {}...".format(name))
-            zip_f.extractall(path="build/" + name + "-src")
+        if not os.path.exists(zipFileName) and not os.path.exists(sourcePath):
+            try:
+                print("download {}...".format(name))
+                urllib.request.urlretrieve(url, zipFileName)
+            except Exception as e:
+                print("Error occurred when downloading file {}, error message:{}".format(name, e))
+                continue      
 
-        os.remove(filename)
+        if not os.path.exists(sourcePath):
+            command = find_command("unzip", msg="unzip is required")
+            run(command, '-j', '-o', zipFileName, '-d', sourcePath)
+            os.remove(zipFileName)
+
 
 if __name__ == '__main__':
     parser = ArgumentParser(formatter_class=ArgumentDefaultsHelpFormatter)

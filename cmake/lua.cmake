@@ -19,14 +19,14 @@ include_guard()
 
 include(cmake/utils.cmake)
 
-if(NOT EXISTS ${PROJECT_BINARY_DIR}/lua-src)
+if(NOT EXISTS ${PROJECT_BINARY_DIR}/_deps/lua-src)
   FetchContent_DeclareGitHubWithMirror(lua
     KvrocksLabs/lua c8e4bbfa25f7202f3b778ccb88e54ab84a1861fb
     MD5=79950ff054ae76e5c9f9c57b38484229
   )
 else()
  FetchContent_Declare(lua
-    SOURCE_DIR ${PROJECT_BINARY_DIR}/lua-src
+    SOURCE_DIR ${PROJECT_BINARY_DIR}/_deps/lua-src
   )
 endif()
 

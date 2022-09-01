@@ -19,14 +19,14 @@ include_guard()
 
 include(cmake/utils.cmake)
 
-if(NOT EXISTS ${PROJECT_BINARY_DIR}/lz4-src)
+if(NOT EXISTS ${PROJECT_BINARY_DIR}/_deps/lz4-src)
   FetchContent_DeclareGitHubWithMirror(lz4
     lz4/lz4 v1.9.3
     MD5=72defe037b2c3db7a69affe7fe4bffd6
   )
 else()
  FetchContent_Declare(lz4
-    SOURCE_DIR ${PROJECT_BINARY_DIR}/lz4-src
+    SOURCE_DIR ${PROJECT_BINARY_DIR}/_deps/lz4-src
   )
 endif()
 

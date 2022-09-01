@@ -19,14 +19,14 @@ include_guard()
 
 include(cmake/utils.cmake)
 
-if(NOT EXISTS ${PROJECT_BINARY_DIR}/snappy-src)
+if(NOT EXISTS ${PROJECT_BINARY_DIR}/_deps/snappy-src)
   FetchContent_DeclareGitHubWithMirror(snappy
     google/snappy 1.1.9
     MD5=1ecaa4c5c662c2d9cb669669d22c28aa
   )
 else()
  FetchContent_Declare(snappy
-    SOURCE_DIR ${PROJECT_BINARY_DIR}/snappy-src
+    SOURCE_DIR ${PROJECT_BINARY_DIR}/_deps/snappy-src
   )
 endif()
 
