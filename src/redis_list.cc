@@ -19,18 +19,19 @@ rocksdb::Status List::Size(const Slice &user_key, uint32_t *ret) {
   return rocksdb::Status::OK();
 }
 
-rocksdb::Status List::Push(const Slice &user_key, const std::vector<Slice> &elems, bool left, int *ret) {
-  return push(user_key, elems, true, left, ret);
+rocksdb::Status List::Push(const Slice &user_key, const std::vector<Slice> &elems, bool left, int ttl, int *ret) {
+  return push(user_key, elems, true, left, ttl, ret);
 }
 
 rocksdb::Status List::PushX(const Slice &user_key, const std::vector<Slice> &elems, bool left, int *ret) {
-  return push(user_key, elems, false, left, ret);
+  return push(user_key, elems, false, left, -1, ret);
 }
 
 rocksdb::Status List::push(const Slice &user_key,
                            std::vector<Slice> elems,
                            bool create_if_missing,
                            bool left,
+                           int ttl,
                            int *ret) {
   *ret = 0;
   std::string ns_key;
@@ -46,6 +47,13 @@ rocksdb::Status List::push(const Slice &user_key,
   if (!s.ok() && !(create_if_missing && s.IsNotFound())) {
     return s.IsNotFound() ? rocksdb::Status::OK() : s;
   }
+
+  if (ttl > 0) {
+    int64_t now;
+    rocksdb::Env::Default()->GetCurrentTime(&now);
+    metadata.expire = now + ttl;
+  }
+
   uint64_t index = left ? metadata.head - 1 : metadata.tail;
   for (const auto &elem : elems) {
     std::string index_buf, sub_key;
@@ -67,8 +75,20 @@ rocksdb::Status List::push(const Slice &user_key,
   return storage_->Write(rocksdb::WriteOptions(), &batch);
 }
 
-rocksdb::Status List::Pop(const Slice &user_key, std::string *elem, bool left) {
+rocksdb::Status List::Pop(const Slice &user_key, bool left, std::string *elem) {
   elem->clear();
+
+  std::vector<std::string> elems;
+  auto s = PopMulti(user_key, left, 1, &elems);
+  if (!s.ok()) return s;
+
+  *elem = std::move(elems[0]);
+  return rocksdb::Status::OK();
+}
+
+rocksdb::Status List::PopMulti(const rocksdb::Slice &user_key, bool left, uint32_t count,
+                               std::vector<std::string> *elems) {
+  elems->clear();
 
   std::string ns_key;
   AppendNamespacePrefix(user_key, &ns_key);
@@ -78,27 +98,35 @@ rocksdb::Status List::Pop(const Slice &user_key, std::string *elem, bool left) {
   rocksdb::Status s = GetMetadata(ns_key, &metadata);
   if (!s.ok()) return s;
 
-  uint64_t index = left ? metadata.head : metadata.tail - 1;
-  std::string buf;
-  PutFixed64(&buf, index);
-  std::string sub_key;
-  InternalKey(ns_key, buf, metadata.version, storage_->IsSlotIdEncoded()).Encode(&sub_key);
-  s = db_->Get(rocksdb::ReadOptions(), sub_key, elem);
-  if (!s.ok()) {
-    // FIXME: should be always exists??
-    return s;
-  }
   rocksdb::WriteBatch batch;
   RedisCommand cmd = left ? kRedisCmdLPop : kRedisCmdRPop;
   WriteBatchLogData log_data(kRedisList, {std::to_string(cmd)});
   batch.PutLogData(log_data.Encode());
-  batch.Delete(sub_key);
-  if (metadata.size == 1) {
+
+  while (metadata.size > 0 && count > 0) {
+    uint64_t index = left ? metadata.head : metadata.tail - 1;
+    std::string buf;
+    PutFixed64(&buf, index);
+    std::string sub_key;
+    InternalKey(ns_key, buf, metadata.version, storage_->IsSlotIdEncoded()).Encode(&sub_key);
+    std::string elem;
+    s = db_->Get(rocksdb::ReadOptions(), sub_key, &elem);
+    if (!s.ok()) {
+      // FIXME: should be always exists??
+      return s;
+    }
+
+    elems->push_back(elem);
+    batch.Delete(sub_key);
+    metadata.size -= 1;
+    left ? ++metadata.head : --metadata.tail;
+    --count;
+  }
+
+  if (metadata.size == 0) {
     batch.Delete(metadata_cf_handle_, ns_key);
   } else {
     std::string bytes;
-    metadata.size -= 1;
-    left ? ++metadata.head : --metadata.tail;
     metadata.Encode(&bytes);
     batch.Put(metadata_cf_handle_, ns_key, bytes);
   }
@@ -418,13 +446,13 @@ rocksdb::Status List::RPopLPush(const Slice &src, const Slice &dst, std::string 
     return rocksdb::Status::InvalidArgument(kErrMsgWrongType);
   }
 
-  s = Pop(src, elem, false);
+  s = Pop(src, false, elem);
   if (!s.ok()) return s;
 
   int ret;
   std::vector<Slice> elems;
   elems.emplace_back(*elem);
-  s = Push(dst, elems, true, &ret);
+  s = Push(dst, elems, true, -1, &ret);
   return s;
 }
 

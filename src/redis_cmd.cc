@@ -1348,7 +1348,8 @@ class CommandPush : public Commander {
     int ret;
     rocksdb::Status s;
     if (create_if_missing_) {
-      s = list_db.Push(args_[1], elems, left_, &ret);
+      Config *config = svr->GetConfig();
+      s = list_db.Push(args_[1], elems, left_, config->global_ttl, &ret);
     } else {
       s = list_db.PushX(args_[1], elems, left_, &ret);
     }
@@ -1389,24 +1390,65 @@ class CommandRPushX : public CommandPush {
 
 class CommandPop : public Commander {
  public:
-  explicit CommandPop(bool left) { left_ = left; }
+  explicit CommandPop(bool left) : left_(left) {}
+  Status Parse(const std::vector<std::string> &args) override {
+    if (args.size() > 3) {
+      return Status(Status::RedisParseErr, errWrongNumOfArguments);
+    }
+
+    if (args.size() == 2) {
+      return Status::OK();
+    }
+
+    try {
+      count_ = std::stoi(args[2]);
+    } catch (std::exception &e) {
+      return Status(Status::RedisParseErr, errValueNotInterger);
+    }
+
+    if (count_ < 0) {
+      return Status(Status::RedisParseErr, "errValueMustBePositive");
+    }
+
+    with_count_ = true;
+    return Status::OK();
+  }
+
   Status Execute(Server *svr, Connection *conn, std::string *output) override {
     Redis::List list_db(svr->storage_, conn->GetNamespace());
-    std::string elem;
-    rocksdb::Status s = list_db.Pop(args_[1], &elem, left_);
-    if (!s.ok() && !s.IsNotFound()) {
-      return Status(Status::RedisExecErr, s.ToString());
-    }
-    if (s.IsNotFound()) {
-      *output = Redis::NilString();
+    if (with_count_) {
+      std::vector<std::string> elems;
+      auto s = list_db.PopMulti(args_[1], left_, count_, &elems);
+      if (!s.ok() && !s.IsNotFound()) {
+        return Status(Status::RedisExecErr, s.ToString());
+      }
+
+      if (s.IsNotFound()) {
+        *output = Redis::MultiLen(-1);
+      } else {
+        *output = Redis::MultiBulkString(elems);
+      }
     } else {
-      *output = Redis::BulkString(elem);
+      std::string elem;
+      auto s = list_db.Pop(args_[1], left_, &elem);
+      if (!s.ok() && !s.IsNotFound()) {
+        return Status(Status::RedisExecErr, s.ToString());
+      }
+
+      if (s.IsNotFound()) {
+        *output = Redis::NilString();
+      } else {
+        *output = Redis::BulkString(elem);
+      }
     }
+
     return Status::OK();
   }
 
  private:
   bool left_;
+  bool with_count_ = false;
+  uint32_t count_ = 1;
 };
 
 class CommandLPop : public CommandPop {
@@ -1475,7 +1517,7 @@ class CommandBPop : public Commander {
     rocksdb::Status s;
     for (const auto &key : keys_) {
       last_key = key;
-      s = list_db.Pop(key, &elem, left_);
+      s = list_db.Pop(key, left_, &elem);
       if (s.ok() || !s.IsNotFound()) {
         break;
       }
@@ -4624,8 +4666,8 @@ CommandAttributes redisCommandTable[] = {
     ADD_CMD("rpush", -3, "write", 1, 1, 1, CommandRPush),
     ADD_CMD("lpushx", -3, "write", 1, 1, 1, CommandLPushX),
     ADD_CMD("rpushx", -3, "write", 1, 1, 1, CommandRPushX),
-    ADD_CMD("lpop", 2, "write", 1, 1, 1, CommandLPop),
-    ADD_CMD("rpop", 2, "write", 1, 1, 1, CommandRPop),
+    ADD_CMD("lpop", -2, "write", 1, 1, 1, CommandLPop),
+    ADD_CMD("rpop", -2, "write", 1, 1, 1, CommandRPop),
     ADD_CMD("blpop", -3, "write no-script", 1, -2, 1, CommandBLPop),
     ADD_CMD("brpop", -3, "write no-script", 1, -2, 1, CommandBRPop),
     ADD_CMD("lrem", 4, "write", 1, 1, 1, CommandLRem),
