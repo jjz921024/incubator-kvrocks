@@ -1,6 +1,6 @@
 # kvrocks Makefile
 CXX= g++
-CXXFLAGS= -O2 -std=c++11 -Wall -Wpedantic -Wsign-compare -Wreturn-type -fno-omit-frame-pointer -DNDEBUG=1 -Wno-unused-result
+CXXFLAGS= -O2 -std=c++17 -Wall -Wpedantic -Wsign-compare -Wreturn-type -fno-omit-frame-pointer -DNDEBUG=1 -Wno-unused-result
 LDFLAGS= -pthread -ldl
 FINAL_CXXFLAGS+= $(CXXFLAGS) $(DEBUG)
 LUA_CFLAGS+= -O2 -Wall -DLUA_ANSI -DENABLE_CJSON_GLOBAL -DREDIS_STATIC='' $(CFLAGS)
@@ -90,7 +90,7 @@ endif
 
 PROG=kvrocks
 
-all: $(PROG) kvrocks2redis
+all: $(PROG)
 	@echo ""
 	@printf $(MAKECOLOR)"Hint: It's a good idea to run 'make test' ;)"$(ENDCOLOR)
 	@echo ""

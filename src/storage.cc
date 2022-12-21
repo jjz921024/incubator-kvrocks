@@ -340,7 +340,7 @@ Status Storage::DestroyBackup() {
 Status Storage::RestoreFromBackup() {
   // TODO(@ruoshan): assert role to be slave
   // We must reopen the backup engine every time, as the files is changed
-  rocksdb::BackupableDBOptions bk_option(config_->backup_sync_dir);
+  rocksdb::BackupEngineOptions bk_option(config_->backup_sync_dir);
   auto s = rocksdb::BackupEngine::Open(db_->GetEnv(), bk_option, &backup_);
   if (!s.ok()) return Status(Status::DBBackupErr, s.ToString());
 
@@ -542,8 +542,8 @@ uint64_t Storage::GetTotalSize(const std::string &ns) {
 
   Redis::Database db(this, ns);
   uint64_t size, total_size = 0;
-  uint8_t include_both = rocksdb::DB::SizeApproximationFlags::INCLUDE_FILES |
-      rocksdb::DB::SizeApproximationFlags::INCLUDE_MEMTABLES;
+  rocksdb::DB::SizeApproximationFlags include_both =
+      rocksdb::DB::SizeApproximationFlags::INCLUDE_FILES | rocksdb::DB::SizeApproximationFlags::INCLUDE_MEMTABLES;
   for (auto cf_handle : cf_handles_) {
     if (cf_handle == GetCFHandle(kPubSubColumnFamilyName) ||
         cf_handle == GetCFHandle(kPropagateColumnFamilyName)) {
