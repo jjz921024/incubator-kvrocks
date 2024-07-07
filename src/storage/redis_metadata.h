@@ -134,6 +134,7 @@ class InternalKey {
 };
 
 constexpr uint8_t METADATA_64BIT_ENCODING_MASK = 0x80;
+constexpr uint8_t METADATA_HASH_FIELD_EXPIRE_MASK = 0x40;
 constexpr uint8_t METADATA_TYPE_MASK = 0x0f;
 
 class Metadata {
@@ -203,6 +204,8 @@ class Metadata {
 class HashMetadata : public Metadata {
  public:
   explicit HashMetadata(bool generate_version = true) : Metadata(kRedisHash, generate_version) {}
+
+  bool IsEncodedFieldExpire() const;
 };
 
 class SetMetadata : public Metadata {

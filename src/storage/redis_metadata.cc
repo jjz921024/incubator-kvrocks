@@ -334,6 +334,10 @@ bool Metadata::IsEmptyableType() const {
 
 bool Metadata::Expired() const { return ExpireAt(util::GetTimeStampMS()); }
 
+bool HashMetadata::IsEncodedFieldExpire() const {
+  return flags & METADATA_HASH_FIELD_EXPIRE_MASK; 
+}
+
 ListMetadata::ListMetadata(bool generate_version)
     : Metadata(kRedisList, generate_version), head(UINT64_MAX / 2), tail(head) {}
 

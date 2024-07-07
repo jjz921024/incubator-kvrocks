@@ -39,6 +39,8 @@ struct FieldValue {
 
 enum class HashFetchType { kAll = 0, kOnlyKey = 1, kOnlyValue = 2 };
 
+enum class HashFieldExpireType { None, NX, XX, GT, LT };
+
 namespace redis {
 
 class Hash : public SubKeyScanner {
@@ -63,9 +65,15 @@ class Hash : public SubKeyScanner {
                        std::vector<std::string> *values = nullptr);
   rocksdb::Status RandField(const Slice &user_key, int64_t command_count, std::vector<FieldValue> *field_values,
                             HashFetchType type = HashFetchType::kOnlyKey);
+  rocksdb::Status ExpireFields(const Slice &user_key, uint64_t expire_ms, const std::vector<Slice> &fields, 
+                               HashFieldExpireType type, std::vector<int8_t> *ret);
+  rocksdb::Status TTLFields(const Slice &user_key, const std::vector<Slice> &fields, std::vector<int64_t> *ret);
 
  private:
   rocksdb::Status GetMetadata(Database::GetOptions get_options, const Slice &ns_key, HashMetadata *metadata);
+  static rocksdb::Status decodeFieldValue(const HashMetadata &metadata, std::string *value, uint64_t &expire);
+  static rocksdb::Status encodeValueExpire(std::string *value, uint64_t expire);
+  static bool isMeetCondition(HashFieldExpireType type, uint64_t new_expire, uint64_t old_expire);
 
   friend struct FieldValueRetriever;
 };

@@ -31,6 +31,7 @@
 #include "db_util.h"
 #include "parse_util.h"
 #include "sample_helper.h"
+#include "time_util.h"
 
 namespace redis {
 
@@ -45,7 +46,13 @@ rocksdb::Status Hash::Size(const Slice &user_key, uint64_t *size) {
   HashMetadata metadata(false);
   rocksdb::Status s = GetMetadata(Database::GetOptions{}, ns_key, &metadata);
   if (!s.ok()) return s;
-  *size = metadata.size;
+  if (!metadata.IsEncodedFieldExpire()) {
+    *size = metadata.size;
+  } else {
+    std::vector<FieldValue> field_values;
+    GetAll(user_key, &field_values, HashFetchType::kOnlyKey);
+    *size = field_values.size();
+  }
   return rocksdb::Status::OK();
 }
 
@@ -58,7 +65,10 @@ rocksdb::Status Hash::Get(const Slice &user_key, const Slice &field, std::string
   rocksdb::ReadOptions read_options;
   read_options.snapshot = ss.GetSnapShot();
   std::string sub_key = InternalKey(ns_key, field, metadata.version, storage_->IsSlotIdEncoded()).Encode();
-  return storage_->Get(read_options, sub_key, value);
+  s = storage_->Get(read_options, sub_key, value);
+  if (!s.ok()) return s;
+  uint64_t expire = 0;
+  return decodeFieldValue(metadata, value, expire);
 }
 
 rocksdb::Status Hash::IncrBy(const Slice &user_key, const Slice &field, int64_t increment, int64_t *new_value) {
@@ -72,12 +82,13 @@ rocksdb::Status Hash::IncrBy(const Slice &user_key, const Slice &field, int64_t 
   rocksdb::Status s = GetMetadata(GetOptions{}, ns_key, &metadata);
   if (!s.ok() && !s.IsNotFound()) return s;
 
+  uint64_t expire = 0;
   std::string sub_key = InternalKey(ns_key, field, metadata.version, storage_->IsSlotIdEncoded()).Encode();
   if (s.ok()) {
     std::string value_bytes;
     s = storage_->Get(rocksdb::ReadOptions(), sub_key, &value_bytes);
-    if (!s.ok() && !s.IsNotFound()) return s;
-    if (s.ok()) {
+    if (!s.ok() && !s.IsNotFound()) return s;  
+    if (s.ok() && decodeFieldValue(metadata, &value_bytes, expire).ok()) {
       auto parse_result = ParseInt<int64_t>(value_bytes, 10);
       if (!parse_result) {
         return rocksdb::Status::InvalidArgument(parse_result.Msg());
@@ -87,6 +98,9 @@ rocksdb::Status Hash::IncrBy(const Slice &user_key, const Slice &field, int64_t 
       }
       old_value = *parse_result;
       exists = true;
+    } else {
+      // reset expiratime
+      expire = 0;
     }
   }
   if ((increment < 0 && old_value < 0 && increment < (LLONG_MIN - old_value)) ||
@@ -98,7 +112,11 @@ rocksdb::Status Hash::IncrBy(const Slice &user_key, const Slice &field, int64_t 
   auto batch = storage_->GetWriteBatchBase();
   WriteBatchLogData log_data(kRedisHash);
   batch->PutLogData(log_data.Encode());
-  batch->Put(sub_key, std::to_string(*new_value));
+  auto value_str = std::to_string(*new_value);
+  if (metadata.IsEncodedFieldExpire()) {
+    encodeValueExpire(&value_str, expire);
+  }
+  batch->Put(sub_key, value_str);
   if (!exists) {
     metadata.size += 1;
     std::string bytes;
@@ -119,18 +137,21 @@ rocksdb::Status Hash::IncrByFloat(const Slice &user_key, const Slice &field, dou
   rocksdb::Status s = GetMetadata(GetOptions{}, ns_key, &metadata);
   if (!s.ok() && !s.IsNotFound()) return s;
 
+  uint64_t expire = 0;
   std::string sub_key = InternalKey(ns_key, field, metadata.version, storage_->IsSlotIdEncoded()).Encode();
   if (s.ok()) {
     std::string value_bytes;
     s = storage_->Get(rocksdb::ReadOptions(), sub_key, &value_bytes);
-    if (!s.ok() && !s.IsNotFound()) return s;
-    if (s.ok()) {
+    if (!s.ok() && !s.IsNotFound()) return s;  
+    if (s.ok() && decodeFieldValue(metadata, &value_bytes, expire).ok()) {
       auto value_stat = ParseFloat(value_bytes);
       if (!value_stat || isspace(value_bytes[0])) {
         return rocksdb::Status::InvalidArgument("value is not a number");
       }
       old_value = *value_stat;
       exists = true;
+    } else {
+      expire = 0;
     }
   }
   double n = old_value + increment;
@@ -142,7 +163,11 @@ rocksdb::Status Hash::IncrByFloat(const Slice &user_key, const Slice &field, dou
   auto batch = storage_->GetWriteBatchBase();
   WriteBatchLogData log_data(kRedisHash);
   batch->PutLogData(log_data.Encode());
-  batch->Put(sub_key, std::to_string(*new_value));
+  auto value_str = std::to_string(*new_value);
+  if (metadata.IsEncodedFieldExpire()) {
+    encodeValueExpire(&value_str, expire);
+  }
+  batch->Put(sub_key, value_str);
   if (!exists) {
     metadata.size += 1;
     std::string bytes;
@@ -184,10 +209,17 @@ rocksdb::Status Hash::MGet(const Slice &user_key, const std::vector<Slice> &fiel
   statuses_vector.resize(keys.size());
   storage_->MultiGet(read_options, storage_->GetDB()->DefaultColumnFamily(), keys.size(), keys.data(),
                      values_vector.data(), statuses_vector.data());
+
   for (size_t i = 0; i < keys.size(); i++) {
     if (!statuses_vector[i].ok() && !statuses_vector[i].IsNotFound()) return statuses_vector[i];
-    values->emplace_back(values_vector[i].ToString());
-    statuses->emplace_back(statuses_vector[i]);
+    auto value = values_vector[i].ToString();
+    auto status = statuses_vector[i];
+    if (!status.IsNotFound()) {
+      uint64_t expire = 0;
+      status = decodeFieldValue(metadata, &value, expire);
+    }
+    values->emplace_back(value);
+    statuses->emplace_back(status);
   }
   return rocksdb::Status::OK();
 }
@@ -208,14 +240,19 @@ rocksdb::Status Hash::Delete(const Slice &user_key, const std::vector<Slice> &fi
   rocksdb::Status s = GetMetadata(GetOptions{}, ns_key, &metadata);
   if (!s.ok()) return s.IsNotFound() ? rocksdb::Status::OK() : s;
 
-  std::string value;
   std::unordered_set<std::string_view> field_set;
   for (const auto &field : fields) {
     if (!field_set.emplace(field.ToStringView()).second) {
       continue;
     }
     std::string sub_key = InternalKey(ns_key, field, metadata.version, storage_->IsSlotIdEncoded()).Encode();
+    std::string value;
     s = storage_->Get(rocksdb::ReadOptions(), sub_key, &value);
+    if (!s.ok() && !s.IsNotFound()) {
+      return s;
+    }
+    uint64_t expire = 0;
+    s = decodeFieldValue(metadata, &value, expire);
     if (s.ok()) {
       *deleted_cnt += 1;
       batch->Delete(sub_key);
@@ -254,21 +291,28 @@ rocksdb::Status Hash::MSet(const Slice &user_key, const std::vector<FieldValue> 
     bool exists = false;
     std::string sub_key = InternalKey(ns_key, it->field, metadata.version, storage_->IsSlotIdEncoded()).Encode();
 
+    uint64_t expire = 0;
     if (metadata.size > 0) {
       std::string field_value;
       s = storage_->Get(rocksdb::ReadOptions(), sub_key, &field_value);
       if (!s.ok() && !s.IsNotFound()) return s;
-
+  
       if (s.ok()) {
         if (nx || field_value == it->value) continue;
-
-        exists = true;
+        exists = decodeFieldValue(metadata, &field_value, expire).ok();
       }
     }
 
-    if (!exists) added++;
+    if (!exists) {
+      added++;
+      expire = 0;
+    }
 
-    batch->Put(sub_key, it->value);
+    auto value = it->value;
+    if (metadata.IsEncodedFieldExpire()) {
+      encodeValueExpire(&value, expire);
+    }
+    batch->Put(sub_key, value);
   }
 
   if (added > 0) {
@@ -334,8 +378,13 @@ rocksdb::Status Hash::RangeByLex(const Slice &user_key, const RangeLexSpec &spec
         break;
     }
     if (spec.offset >= 0 && pos++ < spec.offset) continue;
-
-    field_values->emplace_back(ikey.GetSubKey().ToString(), iter->value().ToString());
+    // filte expired field
+    auto value = iter->value().ToString();
+    uint64_t expire = 0;
+    if (!decodeFieldValue(metadata, &value, expire).ok()) {
+      continue;
+    }
+    field_values->emplace_back(ikey.GetSubKey().ToString(), value);
     if (spec.count > 0 && field_values->size() >= static_cast<unsigned>(spec.count)) break;
   }
   return rocksdb::Status::OK();
@@ -361,14 +410,20 @@ rocksdb::Status Hash::GetAll(const Slice &user_key, std::vector<FieldValue> *fie
 
   auto iter = util::UniqueIterator(storage_, read_options);
   for (iter->Seek(prefix_key); iter->Valid() && iter->key().starts_with(prefix_key); iter->Next()) {
+    // filte expired field
+    uint64_t expire = 0;
+    auto value = iter->value().ToString();
+    if (!decodeFieldValue(metadata, &value, expire).ok()) {
+      continue;
+    }
     if (type == HashFetchType::kOnlyKey) {
       InternalKey ikey(iter->key(), storage_->IsSlotIdEncoded());
       field_values->emplace_back(ikey.GetSubKey().ToString(), "");
     } else if (type == HashFetchType::kOnlyValue) {
-      field_values->emplace_back("", iter->value().ToString());
+      field_values->emplace_back("", value);
     } else {
       InternalKey ikey(iter->key(), storage_->IsSlotIdEncoded());
-      field_values->emplace_back(ikey.GetSubKey().ToString(), iter->value().ToString());
+      field_values->emplace_back(ikey.GetSubKey().ToString(), value);
     }
   }
   return rocksdb::Status::OK();
@@ -416,6 +471,192 @@ rocksdb::Status Hash::RandField(const Slice &user_key, int64_t command_count, st
       break;
   }
   return rocksdb::Status::OK();
+}
+
+rocksdb::Status Hash::ExpireFields(const Slice &user_key, uint64_t expire_ms, 
+                                  const std::vector<Slice> &fields, HashFieldExpireType type, 
+                                  std::vector<int8_t> *ret) {
+  std::string ns_key = AppendNamespacePrefix(user_key);
+  HashMetadata metadata(false);
+  LatestSnapShot ss(storage_);
+  rocksdb::Status s = GetMetadata(GetOptions{ss.GetSnapShot()}, ns_key, &metadata);
+  if (!s.ok()) {
+    ret->resize(fields.size(), -2);
+    return rocksdb::Status::OK();
+  }
+
+  rocksdb::ReadOptions read_options = storage_->DefaultMultiGetOptions();
+  read_options.snapshot = ss.GetSnapShot();
+
+  std::vector<Slice> sub_keys;
+  sub_keys.reserve(fields.size());
+  for (auto field : fields) {
+    sub_keys.emplace_back(InternalKey(ns_key, field, metadata.version, storage_->IsSlotIdEncoded()).Encode());
+  }
+
+  auto batch = storage_->GetWriteBatchBase();
+  WriteBatchLogData log_data(kRedisHash);
+  batch->PutLogData(log_data.Encode());
+
+  // expire special field
+  std::vector<rocksdb::PinnableSlice> values_vector;
+  values_vector.resize(sub_keys.size());
+  std::vector<rocksdb::Status> statuses_vector;
+  statuses_vector.resize(sub_keys.size());
+  storage_->MultiGet(read_options, storage_->GetDB()->DefaultColumnFamily(), sub_keys.size(), sub_keys.data(),
+                      values_vector.data(), statuses_vector.data());
+
+  auto now = util::GetTimeStampMS();
+  for (size_t i = 0; i < sub_keys.size(); i++) {
+    if (!statuses_vector[i].ok() && !statuses_vector[i].IsNotFound()) return statuses_vector[i];
+    auto status = statuses_vector[i];
+
+    // no such field exists
+    if (status.IsNotFound()) {
+      ret->emplace_back(-2);
+      continue;
+    }
+
+    InternalKey sub_ikey(ns_key, fields[i], metadata.version, storage_->IsSlotIdEncoded());
+    
+    // expire with a pass time
+    if (expire_ms <= now) {
+      batch->Delete(sub_ikey.Encode());
+      ret->emplace_back(2);
+      metadata.size -= 1;
+      continue;
+    }
+
+    auto value = values_vector[i].ToString();
+    uint64_t field_expire = 0;
+    decodeFieldValue(metadata, &value, field_expire);
+    if (isMeetCondition(type, expire_ms, field_expire)) {
+      encodeValueExpire(&value, expire_ms);
+      batch->Put(sub_ikey.Encode(), value);
+      ret->emplace_back(1);
+    } else {
+      ret->emplace_back(0);
+    }
+  }
+
+  // convert rest field encoding
+  if (!metadata.IsEncodedFieldExpire()) {
+    metadata.flags |= METADATA_HASH_FIELD_EXPIRE_MASK;
+
+    std::unordered_set<std::string_view> field_set;
+    for (auto field : fields) {
+      if (!field_set.emplace(field.ToStringView()).second) {
+        continue;
+      }
+    }
+        
+    std::string prefix_key = InternalKey(ns_key, "", metadata.version, storage_->IsSlotIdEncoded()).Encode();
+    std::string next_version_prefix_key =
+        InternalKey(ns_key, "", metadata.version + 1, storage_->IsSlotIdEncoded()).Encode();
+
+    rocksdb::Slice upper_bound(next_version_prefix_key);
+    read_options.iterate_upper_bound = &upper_bound;
+
+    auto iter = util::UniqueIterator(storage_, read_options);
+    for (iter->Seek(prefix_key); iter->Valid() && iter->key().starts_with(prefix_key); iter->Next()) {
+      InternalKey sub_ikey(iter->key(), storage_->IsSlotIdEncoded());
+      auto value = iter->value().ToString();
+      if (field_set.find(sub_ikey.GetSubKey().ToStringView()) == field_set.end()) {
+        encodeValueExpire(&value, 0);
+        batch->Put(sub_ikey.Encode(), value);
+      }
+    }
+  }
+
+  std::string bytes;
+  metadata.Encode(&bytes);
+  batch->Put(metadata_cf_handle_, ns_key, bytes);
+
+  return storage_->Write(storage_->DefaultWriteOptions(), batch->GetWriteBatch());
+}
+
+rocksdb::Status Hash::TTLFields(const Slice &user_key, const std::vector<Slice> &fields, std::vector<int64_t> *ret) {
+  std::string ns_key = AppendNamespacePrefix(user_key);
+  HashMetadata metadata(false);
+  LatestSnapShot ss(storage_);
+  rocksdb::Status s = GetMetadata(GetOptions{ss.GetSnapShot()}, ns_key, &metadata);
+  if (!s.ok()) {
+    ret->resize(fields.size(), -2);
+    return rocksdb::Status::OK();
+  }
+
+  rocksdb::ReadOptions read_options = storage_->DefaultMultiGetOptions();
+  read_options.snapshot = ss.GetSnapShot();
+  std::vector<rocksdb::Slice> keys;
+
+  keys.reserve(fields.size());
+  std::vector<std::string> sub_keys;
+  sub_keys.resize(fields.size());
+  for (size_t i = 0; i < fields.size(); i++) {
+    auto &field = fields[i];
+    sub_keys[i] = InternalKey(ns_key, field, metadata.version, storage_->IsSlotIdEncoded()).Encode();
+    keys.emplace_back(sub_keys[i]);
+  }
+
+  std::vector<rocksdb::PinnableSlice> values_vector;
+  values_vector.resize(keys.size());
+  std::vector<rocksdb::Status> statuses_vector;
+  statuses_vector.resize(keys.size());
+  storage_->MultiGet(read_options, storage_->GetDB()->DefaultColumnFamily(), keys.size(), keys.data(),
+                     values_vector.data(), statuses_vector.data());
+
+  ret->reserve(fields.size());
+  auto now = util::GetTimeStampMS();
+  for (size_t i = 0; i < keys.size(); i++) {
+    if (!statuses_vector[i].ok() && !statuses_vector[i].IsNotFound()) return statuses_vector[i];
+    auto value = values_vector[i].ToString();
+    auto status = statuses_vector[i];
+
+    if (status.IsNotFound()) {
+      ret->emplace_back(-2);
+      continue;
+    }
+
+    uint64_t expire = 0;
+    status = decodeFieldValue(metadata, &value, expire);
+    if (status.IsNotFound()) {
+      ret->emplace_back(-2);
+    } else if (expire == 0) {
+      ret->emplace_back(-1);
+    } else {
+      ret->emplace_back(int64_t(expire - now));
+    }
+  }
+  return rocksdb::Status::OK();
+}
+
+rocksdb::Status Hash::decodeFieldValue(const HashMetadata &metadata, std::string *value, uint64_t &expire) {
+  if (!metadata.IsEncodedFieldExpire()) {
+    return rocksdb::Status::OK();
+  }
+  rocksdb::Slice data(value->data(), value->size());
+  GetFixed64(&data, &expire);
+  *value = data.ToString();
+  return (expire == 0 || expire > util::GetTimeStampMS()) ? rocksdb::Status::OK() : rocksdb::Status::NotFound();
+}
+
+rocksdb::Status Hash::encodeValueExpire(std::string *value, uint64_t expire) {
+  std::string buf;
+  PutFixed64(&buf, expire);
+  buf.append(*value);
+  value->assign(buf.data(), buf.size());
+  return rocksdb::Status::OK();
+}
+
+bool Hash::isMeetCondition(HashFieldExpireType type, uint64_t new_expire, uint64_t old_expire) {
+  if (type == HashFieldExpireType::None) return true;
+  if (type == HashFieldExpireType::NX && old_expire == 0) return true;
+  if (type == HashFieldExpireType::XX && old_expire != 0) return true;
+  // if a filed has no associated expiration, we treated it expiration is infinite
+  auto expire = old_expire == 0 ? UINT64_MAX : old_expire;
+  if (type == HashFieldExpireType::GT && new_expire > expire) return true;
+  if (type == HashFieldExpireType::LT && new_expire < expire) return true;
+  return false;
 }
 
 }  // namespace redis

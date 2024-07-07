@@ -573,6 +573,7 @@ rocksdb::Status SubKeyScanner::Scan(RedisType type, const Slice &user_key, const
   } else {
     start_key = match_prefix_key;
   }
+  auto now = util::GetTimeStampMS();
   for (iter->Seek(start_key); iter->Valid(); iter->Next()) {
     if (!cursor.empty() && iter->key() == start_key) {
       // if cursor is not empty, then we need to skip start_key
@@ -583,9 +584,20 @@ rocksdb::Status SubKeyScanner::Scan(RedisType type, const Slice &user_key, const
       break;
     }
     InternalKey ikey(iter->key(), storage_->IsSlotIdEncoded());
+    auto value = iter->value().ToString();
+    // filter expired hash feild
+    if (type == kRedisHash && (static_cast<HashMetadata*>(&metadata))->IsEncodedFieldExpire()) {
+      uint64_t expire = 0;
+      rocksdb::Slice data(value.data(), value.size());
+      GetFixed64(&data, &expire);
+      value = data.ToString();
+      if (expire != 0 && expire <= now) {
+        continue;
+      }
+    }
     keys->emplace_back(ikey.GetSubKey().ToString());
     if (values != nullptr) {
-      values->emplace_back(iter->value().ToString());
+      values->emplace_back(value);
     }
     cnt++;
     if (limit > 0 && cnt >= limit) {
