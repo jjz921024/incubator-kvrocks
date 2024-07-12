@@ -66,7 +66,7 @@ class Hash : public SubKeyScanner {
   rocksdb::Status RandField(const Slice &user_key, int64_t command_count, std::vector<FieldValue> *field_values,
                             HashFetchType type = HashFetchType::kOnlyKey);
   rocksdb::Status ExpireFields(const Slice &user_key, uint64_t expire_ms, const std::vector<Slice> &fields, 
-                               HashFieldExpireType type, std::vector<int8_t> *ret);
+                               HashFieldExpireType type, bool is_persist, std::vector<int8_t> *ret);
   rocksdb::Status TTLFields(const Slice &user_key, const std::vector<Slice> &fields, std::vector<int64_t> *ret);
 
  private:

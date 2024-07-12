@@ -430,8 +430,6 @@ class CommandHRandField : public Commander {
   bool no_parameters_ = true;
 };
 
-
-
 class CommandFiledExpireBase : public Commander {
  protected:
   Status commonParse(const std::vector<std::string> &args, int start_idx) {
@@ -472,10 +470,10 @@ class CommandFiledExpireBase : public Commander {
     return Status::OK();
   }
 
-  Status expireFieldExecute(Server *srv, Connection *conn, std::string *output) {
+  Status expireFieldExecute(Server *srv, Connection *conn, std::string *output, bool is_persist) {
     std::vector<int8_t> ret;
     redis::Hash hash_db(srv->storage, conn->GetNamespace());
-    auto s = hash_db.ExpireFields(args_[1], expire_, fields_, field_expire_type_, &ret);
+    auto s = hash_db.ExpireFields(args_[1], expire_, fields_, field_expire_type_, is_persist, &ret);
     if (!s.ok()) {
       return {Status::RedisExecErr, s.ToString()};
     }
@@ -502,7 +500,6 @@ class CommandFiledExpireBase : public Commander {
   std::vector<Slice> fields_;
 };
 
-
 class CommandHExpire : public CommandFiledExpireBase {
  public:
   Status Parse(const std::vector<std::string> &args) override {
@@ -514,7 +511,7 @@ class CommandHExpire : public CommandFiledExpireBase {
   }
 
   Status Execute(Server *srv, Connection *conn, std::string *output) override {
-    return expireFieldExecute(srv, conn, output);
+    return expireFieldExecute(srv, conn, output, false);
   }
 };
 
@@ -529,7 +526,7 @@ class CommandHExpireAt : public CommandFiledExpireBase {
   }
   
   Status Execute(Server *srv, Connection *conn, std::string *output) override {
-    return expireFieldExecute(srv, conn, output);
+    return expireFieldExecute(srv, conn, output, false);
   }
 };
 
@@ -544,7 +541,7 @@ class CommandHPExpire : public CommandFiledExpireBase {
   }
 
   Status Execute(Server *srv, Connection *conn, std::string *output) override {
-    return expireFieldExecute(srv, conn, output);
+    return expireFieldExecute(srv, conn, output, false);
   }
 };
 
@@ -559,10 +556,9 @@ class CommandHPExpireAt : public CommandFiledExpireBase {
   }
 
   Status Execute(Server *srv, Connection *conn, std::string *output) override {
-    return expireFieldExecute(srv, conn, output);
+    return expireFieldExecute(srv, conn, output, false);
   }
 };
-
 
 class CommandHExpireTime : public CommandFiledExpireBase {
  public:
@@ -654,11 +650,16 @@ class CommandHPTTL : public CommandFiledExpireBase {
   }
 };
 
-
 class CommandHPersist : public CommandFiledExpireBase {
  public:
-  Status Parse(const std::vector<std::string> &args) override {}
-  Status Execute(Server *srv, Connection *conn, std::string *output) override {}
+  Status Parse(const std::vector<std::string> &args) override {
+    return CommandFiledExpireBase::commonParse(args, 2);
+  }
+
+  Status Execute(Server *srv, Connection *conn, std::string *output) override {
+    // equivalent to setting the expiration time to 0
+    return expireFieldExecute(srv, conn, output, true);
+  }
 };
 
 REDIS_REGISTER_COMMANDS(MakeCmdAttr<CommandHGet>("hget", 3, "read-only", 1, 1, 1),

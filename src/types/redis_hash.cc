@@ -99,7 +99,7 @@ rocksdb::Status Hash::IncrBy(const Slice &user_key, const Slice &field, int64_t 
       old_value = *parse_result;
       exists = true;
     } else {
-      // reset expiratime
+      // reset expire time
       expire = 0;
     }
   }
@@ -475,7 +475,7 @@ rocksdb::Status Hash::RandField(const Slice &user_key, int64_t command_count, st
 
 rocksdb::Status Hash::ExpireFields(const Slice &user_key, uint64_t expire_ms, 
                                   const std::vector<Slice> &fields, HashFieldExpireType type, 
-                                  std::vector<int8_t> *ret) {
+                                  bool is_persist, std::vector<int8_t> *ret) {
   std::string ns_key = AppendNamespacePrefix(user_key);
   HashMetadata metadata(false);
   LatestSnapShot ss(storage_);
@@ -520,7 +520,7 @@ rocksdb::Status Hash::ExpireFields(const Slice &user_key, uint64_t expire_ms,
     InternalKey sub_ikey(ns_key, fields[i], metadata.version, storage_->IsSlotIdEncoded());
     
     // expire with a pass time
-    if (expire_ms <= now) {
+    if (expire_ms <= now && !is_persist) {
       batch->Delete(sub_ikey.Encode());
       ret->emplace_back(2);
       metadata.size -= 1;
@@ -533,7 +533,13 @@ rocksdb::Status Hash::ExpireFields(const Slice &user_key, uint64_t expire_ms,
     if (isMeetCondition(type, expire_ms, field_expire)) {
       encodeValueExpire(&value, expire_ms);
       batch->Put(sub_ikey.Encode(), value);
-      ret->emplace_back(1);
+      if (is_persist && field_expire == 0) {
+        // for hpersist command, -1 if the field exists but has no associated expiration
+        ret->emplace_back(-1);
+      } else {
+        // 1 if expiration was updated or removed
+        ret->emplace_back(1);
+      }
     } else {
       ret->emplace_back(0);
     }

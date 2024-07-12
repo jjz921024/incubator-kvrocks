@@ -667,6 +667,17 @@ rocksdb::Status Database::typeInternal(const Slice &key, RedisType *type) {
   if (!s.ok()) return s;
   if (metadata.Expired()) {
     *type = kRedisNone;
+  } else if (metadata.Type() == kRedisHash && (static_cast<HashMetadata*>(&metadata))->IsEncodedFieldExpire()) {
+    redis::Hash hash_db(storage_, namespace_);
+    auto [_, user_key] = ExtractNamespaceKey(key, storage_->IsSlotIdEncoded());
+    std::vector<FieldValue> field_values;
+    s = hash_db.GetAll(user_key, &field_values, HashFetchType::kOnlyKey);
+    if (!s.ok()) {
+      return s;
+    }
+    if (!field_values.empty()) {
+      *type = metadata.Type();
+    } 
   } else {
     *type = metadata.Type();
   }
