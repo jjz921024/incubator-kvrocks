@@ -636,6 +636,16 @@ rocksdb::Status Hash::TTLFields(const Slice &user_key, const std::vector<Slice> 
   return rocksdb::Status::OK();
 }
 
+bool Hash::IsExpiredField(Metadata &metadata, const Slice &value) {
+  if (!(static_cast<HashMetadata*>(&metadata))->IsEncodedFieldExpire()) {
+    return false;
+  }
+  uint64_t expire = 0;
+  rocksdb::Slice data(value);
+  GetFixed64(&data, &expire);
+  return expire != 0 && expire < util::GetTimeStampMS();
+}
+
 rocksdb::Status Hash::decodeFieldValue(const HashMetadata &metadata, std::string *value, uint64_t &expire) {
   if (!metadata.IsEncodedFieldExpire()) {
     return rocksdb::Status::OK();

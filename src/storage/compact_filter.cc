@@ -28,6 +28,7 @@
 #include "db_util.h"
 #include "time_util.h"
 #include "types/redis_bitmap.h"
+#include "types/redis_hash.h"
 
 namespace engine {
 
@@ -131,7 +132,9 @@ bool SubKeyFilter::Filter(int level, const Slice &key, const Slice &value, std::
     return false;
   }
 
-  return IsMetadataExpired(ikey, metadata) || (metadata.Type() == kRedisBitmap && redis::Bitmap::IsEmptySegment(value));
+  return IsMetadataExpired(ikey, metadata) || 
+         (metadata.Type() == kRedisBitmap && redis::Bitmap::IsEmptySegment(value)) || 
+         (metadata.Type() == kRedisHash && redis::Hash::IsExpiredField(metadata, value));
 }
 
 }  // namespace engine
