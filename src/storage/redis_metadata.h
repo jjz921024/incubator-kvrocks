@@ -205,7 +205,7 @@ class HashMetadata : public Metadata {
  public:
   explicit HashMetadata(bool generate_version = true) : Metadata(kRedisHash, generate_version) {}
 
-  bool IsEncodedFieldExpire() const;
+  bool IsEncodedFieldHasTTL() const;
 };
 
 class SetMetadata : public Metadata {

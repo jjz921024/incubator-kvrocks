@@ -46,7 +46,7 @@ rocksdb::Status Hash::Size(const Slice &user_key, uint64_t *size) {
   HashMetadata metadata(false);
   rocksdb::Status s = GetMetadata(Database::GetOptions{}, ns_key, &metadata);
   if (!s.ok()) return s;
-  if (!metadata.IsEncodedFieldExpire()) {
+  if (!metadata.IsEncodedFieldHasTTL()) {
     *size = metadata.size;
   } else {
     std::vector<FieldValue> field_values;
@@ -68,7 +68,7 @@ rocksdb::Status Hash::Get(const Slice &user_key, const Slice &field, std::string
   s = storage_->Get(read_options, sub_key, value);
   if (!s.ok()) return s;
   uint64_t expire = 0;
-  return decodeFieldValue(metadata, value, expire);
+  return decodeFieldAndTTL(metadata, value, expire);
 }
 
 rocksdb::Status Hash::IncrBy(const Slice &user_key, const Slice &field, int64_t increment, int64_t *new_value) {
@@ -88,7 +88,7 @@ rocksdb::Status Hash::IncrBy(const Slice &user_key, const Slice &field, int64_t 
     std::string value_bytes;
     s = storage_->Get(rocksdb::ReadOptions(), sub_key, &value_bytes);
     if (!s.ok() && !s.IsNotFound()) return s;  
-    if (s.ok() && decodeFieldValue(metadata, &value_bytes, expire).ok()) {
+    if (s.ok() && decodeFieldAndTTL(metadata, &value_bytes, expire).ok()) {
       auto parse_result = ParseInt<int64_t>(value_bytes, 10);
       if (!parse_result) {
         return rocksdb::Status::InvalidArgument(parse_result.Msg());
@@ -113,8 +113,8 @@ rocksdb::Status Hash::IncrBy(const Slice &user_key, const Slice &field, int64_t 
   WriteBatchLogData log_data(kRedisHash);
   batch->PutLogData(log_data.Encode());
   auto value_str = std::to_string(*new_value);
-  if (metadata.IsEncodedFieldExpire()) {
-    encodeValueExpire(&value_str, expire);
+  if (metadata.IsEncodedFieldHasTTL()) {
+    encodeFieldAndTTL(&value_str, expire);
   }
   batch->Put(sub_key, value_str);
   if (!exists) {
@@ -143,7 +143,7 @@ rocksdb::Status Hash::IncrByFloat(const Slice &user_key, const Slice &field, dou
     std::string value_bytes;
     s = storage_->Get(rocksdb::ReadOptions(), sub_key, &value_bytes);
     if (!s.ok() && !s.IsNotFound()) return s;  
-    if (s.ok() && decodeFieldValue(metadata, &value_bytes, expire).ok()) {
+    if (s.ok() && decodeFieldAndTTL(metadata, &value_bytes, expire).ok()) {
       auto value_stat = ParseFloat(value_bytes);
       if (!value_stat || isspace(value_bytes[0])) {
         return rocksdb::Status::InvalidArgument("value is not a number");
@@ -164,8 +164,8 @@ rocksdb::Status Hash::IncrByFloat(const Slice &user_key, const Slice &field, dou
   WriteBatchLogData log_data(kRedisHash);
   batch->PutLogData(log_data.Encode());
   auto value_str = std::to_string(*new_value);
-  if (metadata.IsEncodedFieldExpire()) {
-    encodeValueExpire(&value_str, expire);
+  if (metadata.IsEncodedFieldHasTTL()) {
+    encodeFieldAndTTL(&value_str, expire);
   }
   batch->Put(sub_key, value_str);
   if (!exists) {
@@ -216,7 +216,7 @@ rocksdb::Status Hash::MGet(const Slice &user_key, const std::vector<Slice> &fiel
     auto status = statuses_vector[i];
     if (!status.IsNotFound()) {
       uint64_t expire = 0;
-      status = decodeFieldValue(metadata, &value, expire);
+      status = decodeFieldAndTTL(metadata, &value, expire);
     }
     values->emplace_back(value);
     statuses->emplace_back(status);
@@ -252,8 +252,7 @@ rocksdb::Status Hash::Delete(const Slice &user_key, const std::vector<Slice> &fi
       return s;
     }
     uint64_t expire = 0;
-    s = decodeFieldValue(metadata, &value, expire);
-    if (s.ok()) {
+    if (decodeFieldAndTTL(metadata, &value, expire).ok()) {
       *deleted_cnt += 1;
       batch->Delete(sub_key);
     }
@@ -299,7 +298,7 @@ rocksdb::Status Hash::MSet(const Slice &user_key, const std::vector<FieldValue> 
   
       if (s.ok()) {
         if (nx || field_value == it->value) continue;
-        exists = decodeFieldValue(metadata, &field_value, expire).ok();
+        exists = decodeFieldAndTTL(metadata, &field_value, expire).ok();
       }
     }
 
@@ -309,8 +308,8 @@ rocksdb::Status Hash::MSet(const Slice &user_key, const std::vector<FieldValue> 
     }
 
     auto value = it->value;
-    if (metadata.IsEncodedFieldExpire()) {
-      encodeValueExpire(&value, expire);
+    if (metadata.IsEncodedFieldHasTTL()) {
+      encodeFieldAndTTL(&value, expire);
     }
     batch->Put(sub_key, value);
   }
@@ -381,7 +380,7 @@ rocksdb::Status Hash::RangeByLex(const Slice &user_key, const RangeLexSpec &spec
     // filte expired field
     auto value = iter->value().ToString();
     uint64_t expire = 0;
-    if (!decodeFieldValue(metadata, &value, expire).ok()) {
+    if (!decodeFieldAndTTL(metadata, &value, expire).ok()) {
       continue;
     }
     field_values->emplace_back(ikey.GetSubKey().ToString(), value);
@@ -413,7 +412,7 @@ rocksdb::Status Hash::GetAll(const Slice &user_key, std::vector<FieldValue> *fie
     // filte expired field
     uint64_t expire = 0;
     auto value = iter->value().ToString();
-    if (!decodeFieldValue(metadata, &value, expire).ok()) {
+    if (!decodeFieldAndTTL(metadata, &value, expire).ok()) {
       continue;
     }
     if (type == HashFetchType::kOnlyKey) {
@@ -529,9 +528,9 @@ rocksdb::Status Hash::ExpireFields(const Slice &user_key, uint64_t expire_ms,
 
     auto value = values_vector[i].ToString();
     uint64_t field_expire = 0;
-    decodeFieldValue(metadata, &value, field_expire);
+    decodeFieldAndTTL(metadata, &value, field_expire);
     if (isMeetCondition(type, expire_ms, field_expire)) {
-      encodeValueExpire(&value, expire_ms);
+      encodeFieldAndTTL(&value, expire_ms);
       batch->Put(sub_ikey.Encode(), value);
       if (is_persist && field_expire == 0) {
         // for hpersist command, -1 if the field exists but has no associated expiration
@@ -546,7 +545,7 @@ rocksdb::Status Hash::ExpireFields(const Slice &user_key, uint64_t expire_ms,
   }
 
   // convert rest field encoding
-  if (!metadata.IsEncodedFieldExpire()) {
+  if (!metadata.IsEncodedFieldHasTTL()) {
     metadata.flags |= METADATA_HASH_FIELD_EXPIRE_MASK;
 
     std::unordered_set<std::string_view> field_set;
@@ -568,7 +567,7 @@ rocksdb::Status Hash::ExpireFields(const Slice &user_key, uint64_t expire_ms,
       InternalKey sub_ikey(iter->key(), storage_->IsSlotIdEncoded());
       auto value = iter->value().ToString();
       if (field_set.find(sub_ikey.GetSubKey().ToStringView()) == field_set.end()) {
-        encodeValueExpire(&value, 0);
+        encodeFieldAndTTL(&value, 0);
         batch->Put(sub_ikey.Encode(), value);
       }
     }
@@ -624,7 +623,7 @@ rocksdb::Status Hash::TTLFields(const Slice &user_key, const std::vector<Slice> 
     }
 
     uint64_t expire = 0;
-    status = decodeFieldValue(metadata, &value, expire);
+    status = decodeFieldAndTTL(metadata, &value, expire);
     if (status.IsNotFound()) {
       ret->emplace_back(-2);
     } else if (expire == 0) {
@@ -636,8 +635,8 @@ rocksdb::Status Hash::TTLFields(const Slice &user_key, const std::vector<Slice> 
   return rocksdb::Status::OK();
 }
 
-bool Hash::IsExpiredField(Metadata &metadata, const Slice &value) {
-  if (!(static_cast<HashMetadata*>(&metadata))->IsEncodedFieldExpire()) {
+bool Hash::IsFieldExpired(Metadata &metadata, const Slice &value) {
+  if (!(static_cast<HashMetadata*>(&metadata))->IsEncodedFieldHasTTL()) {
     return false;
   }
   uint64_t expire = 0;
@@ -646,8 +645,8 @@ bool Hash::IsExpiredField(Metadata &metadata, const Slice &value) {
   return expire != 0 && expire < util::GetTimeStampMS();
 }
 
-rocksdb::Status Hash::decodeFieldValue(const HashMetadata &metadata, std::string *value, uint64_t &expire) {
-  if (!metadata.IsEncodedFieldExpire()) {
+rocksdb::Status Hash::decodeFieldAndTTL(const HashMetadata &metadata, std::string *value, uint64_t &expire) {
+  if (!metadata.IsEncodedFieldHasTTL()) {
     return rocksdb::Status::OK();
   }
   rocksdb::Slice data(value->data(), value->size());
@@ -656,7 +655,7 @@ rocksdb::Status Hash::decodeFieldValue(const HashMetadata &metadata, std::string
   return (expire == 0 || expire > util::GetTimeStampMS()) ? rocksdb::Status::OK() : rocksdb::Status::NotFound();
 }
 
-rocksdb::Status Hash::encodeValueExpire(std::string *value, uint64_t expire) {
+rocksdb::Status Hash::encodeFieldAndTTL(std::string *value, uint64_t expire) {
   std::string buf;
   PutFixed64(&buf, expire);
   buf.append(*value);
@@ -668,7 +667,7 @@ bool Hash::isMeetCondition(HashFieldExpireType type, uint64_t new_expire, uint64
   if (type == HashFieldExpireType::None) return true;
   if (type == HashFieldExpireType::NX && old_expire == 0) return true;
   if (type == HashFieldExpireType::XX && old_expire != 0) return true;
-  // if a filed has no associated expiration, we treated it expiration is infinite
+  // if a field has no associated expiration, we treated it expiration is infinite
   auto expire = old_expire == 0 ? UINT64_MAX : old_expire;
   if (type == HashFieldExpireType::GT && new_expire > expire) return true;
   if (type == HashFieldExpireType::LT && new_expire < expire) return true;

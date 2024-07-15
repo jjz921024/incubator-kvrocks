@@ -585,15 +585,15 @@ rocksdb::Status SubKeyScanner::Scan(RedisType type, const Slice &user_key, const
     }
     InternalKey ikey(iter->key(), storage_->IsSlotIdEncoded());
     auto value = iter->value().ToString();
-    // filter expired hash feild
-    if (type == kRedisHash && (static_cast<HashMetadata*>(&metadata))->IsEncodedFieldExpire()) {
+    // filter expired hash field
+    if (type == kRedisHash && (static_cast<HashMetadata*>(&metadata))->IsEncodedFieldHasTTL()) {
       uint64_t expire = 0;
       rocksdb::Slice data(value.data(), value.size());
       GetFixed64(&data, &expire);
-      value = data.ToString();
       if (expire != 0 && expire <= now) {
         continue;
       }
+      value = data.ToString();
     }
     keys->emplace_back(ikey.GetSubKey().ToString());
     if (values != nullptr) {
@@ -667,7 +667,7 @@ rocksdb::Status Database::typeInternal(const Slice &key, RedisType *type) {
   if (!s.ok()) return s;
   if (metadata.Expired()) {
     *type = kRedisNone;
-  } else if (metadata.Type() == kRedisHash && (static_cast<HashMetadata*>(&metadata))->IsEncodedFieldExpire()) {
+  } else if (metadata.Type() == kRedisHash && (static_cast<HashMetadata*>(&metadata))->IsEncodedFieldHasTTL()) {
     redis::Hash hash_db(storage_, namespace_);
     auto [_, user_key] = ExtractNamespaceKey(key, storage_->IsSlotIdEncoded());
     std::vector<FieldValue> field_values;

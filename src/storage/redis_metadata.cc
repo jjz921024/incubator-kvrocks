@@ -334,7 +334,7 @@ bool Metadata::IsEmptyableType() const {
 
 bool Metadata::Expired() const { return ExpireAt(util::GetTimeStampMS()); }
 
-bool HashMetadata::IsEncodedFieldExpire() const {
+bool HashMetadata::IsEncodedFieldHasTTL() const {
   return flags & METADATA_HASH_FIELD_EXPIRE_MASK; 
 }
 

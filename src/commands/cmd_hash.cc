@@ -430,7 +430,7 @@ class CommandHRandField : public Commander {
   bool no_parameters_ = true;
 };
 
-class CommandFiledExpireBase : public Commander {
+class CommandFieldExpireBase : public Commander {
  protected:
   Status commonParse(const std::vector<std::string> &args, int start_idx) {
     int idx = start_idx;
@@ -500,14 +500,14 @@ class CommandFiledExpireBase : public Commander {
   std::vector<Slice> fields_;
 };
 
-class CommandHExpire : public CommandFiledExpireBase {
+class CommandHExpire : public CommandFieldExpireBase {
  public:
   Status Parse(const std::vector<std::string> &args) override {
     auto parse_result = ParseInt<uint64_t>(args[2], 10);
     if (!parse_result) return { Status::RedisParseErr, errValueNotInteger };
     
     expire_ = *parse_result * 1000 + util::GetTimeStampMS();
-    return CommandFiledExpireBase::commonParse(args, 3);
+    return CommandFieldExpireBase::commonParse(args, 3);
   }
 
   Status Execute(Server *srv, Connection *conn, std::string *output) override {
@@ -515,14 +515,14 @@ class CommandHExpire : public CommandFiledExpireBase {
   }
 };
 
-class CommandHExpireAt : public CommandFiledExpireBase {
+class CommandHExpireAt : public CommandFieldExpireBase {
  public:
   Status Parse(const std::vector<std::string> &args) override {
     auto parse_result = ParseInt<uint64_t>(args[2], 10);
     if (!parse_result) return { Status::RedisParseErr, errValueNotInteger };
     
     expire_ = *parse_result * 1000;
-    return CommandFiledExpireBase::commonParse(args, 3);
+    return CommandFieldExpireBase::commonParse(args, 3);
   }
   
   Status Execute(Server *srv, Connection *conn, std::string *output) override {
@@ -530,14 +530,14 @@ class CommandHExpireAt : public CommandFiledExpireBase {
   }
 };
 
-class CommandHPExpire : public CommandFiledExpireBase {
+class CommandHPExpire : public CommandFieldExpireBase {
  public:
   Status Parse(const std::vector<std::string> &args) override {
     auto parse_result = ParseInt<uint64_t>(args[2], 10);
     if (!parse_result) return { Status::RedisParseErr, errValueNotInteger };
     
     expire_ = *parse_result + util::GetTimeStampMS();
-    return CommandFiledExpireBase::commonParse(args, 3);
+    return CommandFieldExpireBase::commonParse(args, 3);
   }
 
   Status Execute(Server *srv, Connection *conn, std::string *output) override {
@@ -545,14 +545,14 @@ class CommandHPExpire : public CommandFiledExpireBase {
   }
 };
 
-class CommandHPExpireAt : public CommandFiledExpireBase {
+class CommandHPExpireAt : public CommandFieldExpireBase {
  public:
   Status Parse(const std::vector<std::string> &args) override {
     auto parse_result = ParseInt<uint64_t>(args[2], 10);
     if (!parse_result) return { Status::RedisParseErr, errValueNotInteger };
     
     expire_ = *parse_result;
-    return CommandFiledExpireBase::commonParse(args, 3);
+    return CommandFieldExpireBase::commonParse(args, 3);
   }
 
   Status Execute(Server *srv, Connection *conn, std::string *output) override {
@@ -560,10 +560,10 @@ class CommandHPExpireAt : public CommandFiledExpireBase {
   }
 };
 
-class CommandHExpireTime : public CommandFiledExpireBase {
+class CommandHExpireTime : public CommandFieldExpireBase {
  public:
   Status Parse(const std::vector<std::string> &args) override {
-    return CommandFiledExpireBase::commonParse(args, 2);
+    return CommandFieldExpireBase::commonParse(args, 2);
   }
 
   Status Execute(Server *srv, Connection *conn, std::string *output) override {
@@ -585,10 +585,10 @@ class CommandHExpireTime : public CommandFiledExpireBase {
   }
 };
 
-class CommandHPExpireTime : public CommandFiledExpireBase {
+class CommandHPExpireTime : public CommandFieldExpireBase {
  public:
   Status Parse(const std::vector<std::string> &args) override {
-    return CommandFiledExpireBase::commonParse(args, 2);
+    return CommandFieldExpireBase::commonParse(args, 2);
   }
 
   Status Execute(Server *srv, Connection *conn, std::string *output) override {
@@ -610,10 +610,10 @@ class CommandHPExpireTime : public CommandFiledExpireBase {
   }
 };
 
-class CommandHTTL : public CommandFiledExpireBase {
+class CommandHTTL : public CommandFieldExpireBase {
  public:
   Status Parse(const std::vector<std::string> &args) override {
-    return CommandFiledExpireBase::commonParse(args, 2);
+    return CommandFieldExpireBase::commonParse(args, 2);
   }
 
   Status Execute(Server *srv, Connection *conn, std::string *output) override {
@@ -630,10 +630,10 @@ class CommandHTTL : public CommandFiledExpireBase {
   }
 };
 
-class CommandHPTTL : public CommandFiledExpireBase {
+class CommandHPTTL : public CommandFieldExpireBase {
  public:
   Status Parse(const std::vector<std::string> &args) override {
-    return CommandFiledExpireBase::commonParse(args, 2);
+    return CommandFieldExpireBase::commonParse(args, 2);
   }
 
   Status Execute(Server *srv, Connection *conn, std::string *output) override {
@@ -650,10 +650,10 @@ class CommandHPTTL : public CommandFiledExpireBase {
   }
 };
 
-class CommandHPersist : public CommandFiledExpireBase {
+class CommandHPersist : public CommandFieldExpireBase {
  public:
   Status Parse(const std::vector<std::string> &args) override {
-    return CommandFiledExpireBase::commonParse(args, 2);
+    return CommandFieldExpireBase::commonParse(args, 2);
   }
 
   Status Execute(Server *srv, Connection *conn, std::string *output) override {
