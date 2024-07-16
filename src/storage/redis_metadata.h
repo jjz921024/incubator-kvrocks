@@ -134,8 +134,8 @@ class InternalKey {
 };
 
 constexpr uint8_t METADATA_64BIT_ENCODING_MASK = 0x80;
-constexpr uint8_t METADATA_HASH_FIELD_EXPIRE_MASK = 0x40;
 constexpr uint8_t METADATA_TYPE_MASK = 0x0f;
+constexpr uint8_t METADATA_HASH_FIELD_EXPIRE_MASK = 0x01;
 
 class Metadata {
  public:
@@ -203,9 +203,12 @@ class Metadata {
 
 class HashMetadata : public Metadata {
  public:
+  bool is_ttl_field_encoded;
   explicit HashMetadata(bool generate_version = true) : Metadata(kRedisHash, generate_version) {}
 
-  bool IsEncodedFieldHasTTL() const;
+  void Encode(std::string *dst) const override;
+  using Metadata::Decode;
+  rocksdb::Status Decode(Slice *input) override;
 };
 
 class SetMetadata : public Metadata {

@@ -334,8 +334,27 @@ bool Metadata::IsEmptyableType() const {
 
 bool Metadata::Expired() const { return ExpireAt(util::GetTimeStampMS()); }
 
-bool HashMetadata::IsEncodedFieldHasTTL() const {
-  return flags & METADATA_HASH_FIELD_EXPIRE_MASK; 
+void HashMetadata::Encode(std::string *dst) const {
+  Metadata::Encode(dst);
+  if (is_ttl_field_encoded) {
+    uint8_t flag = 0;
+    flag |= METADATA_HASH_FIELD_EXPIRE_MASK;
+    PutFixed8(dst, flag);
+  }
+}
+
+rocksdb::Status HashMetadata::Decode(Slice *input) {
+  if (auto s = Metadata::Decode(input); !s.ok()) {
+    return s;
+  }
+
+  if (input->size() >= 1) {
+    uint8_t flag = 0;
+    GetFixed8(input, &flag);
+    is_ttl_field_encoded = flag &= METADATA_HASH_FIELD_EXPIRE_MASK;
+  }
+
+  return rocksdb::Status::OK();
 }
 
 ListMetadata::ListMetadata(bool generate_version)
