@@ -740,6 +740,18 @@ var testHash = func(t *testing.T, enabledRESP3 string) {
 		require.Equal(t, uint64(0), cursor)
 	})
 
+	t.Run("HFE expire or ttl a not hash object", func(t *testing.T) {
+		require.Equal(t, "OK", rdb.Set(ctx, "k", "v", 0).Val())
+		require.ErrorContains(t, rdb.Do(ctx, "HEXPIRE", "k", 1, "FIELDS", 1, "f").Err(), "WRONGTYPE")
+		require.ErrorContains(t, rdb.Do(ctx, "HPEXPIRE", "k", 1, "FIELDS", 1, "f").Err(), "WRONGTYPE")
+		require.ErrorContains(t, rdb.Do(ctx, "HEXPIREAT", "k", 1, "FIELDS", 1, "f").Err(), "WRONGTYPE")
+		require.ErrorContains(t, rdb.Do(ctx, "HPEXPIREAT", "k", 1, "FIELDS", 1, "f").Err(), "WRONGTYPE")
+		require.ErrorContains(t, rdb.Do(ctx, "HTTL", "k", "FIELDS", 1, "f").Err(), "WRONGTYPE")
+		require.ErrorContains(t, rdb.Do(ctx, "HPTTL", "k", "FIELDS", 1, "f").Err(), "WRONGTYPE")
+		require.ErrorContains(t, rdb.Do(ctx, "HEXPIRETIME", "k", "FIELDS", 1, "f").Err(), "WRONGTYPE")
+		require.ErrorContains(t, rdb.Do(ctx, "HPEXPIRETIME", "k", "FIELDS", 1, "f").Err(), "WRONGTYPE")
+	})
+
 	for _, size := range []int64{10, 512} {
 		t.Run(fmt.Sprintf("Hash fuzzing #1 - %d fields", size), func(t *testing.T) {
 			for times := 0; times < 10; times++ {

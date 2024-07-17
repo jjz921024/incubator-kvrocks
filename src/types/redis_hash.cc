@@ -478,7 +478,8 @@ rocksdb::Status Hash::ExpireFields(const Slice &user_key, uint64_t expire_ms, co
   HashMetadata metadata(false);
   LatestSnapShot ss(storage_);
   rocksdb::Status s = GetMetadata(GetOptions{ss.GetSnapShot()}, ns_key, &metadata);
-  if (!s.ok()) {
+  if (!s.ok() && !s.IsNotFound()) return s;
+  if (s.IsNotFound()) {
     ret->resize(fields.size(), -2);
     return rocksdb::Status::OK();
   }
@@ -587,7 +588,8 @@ rocksdb::Status Hash::TTLFields(const Slice &user_key, const std::vector<Slice> 
   HashMetadata metadata(false);
   LatestSnapShot ss(storage_);
   rocksdb::Status s = GetMetadata(GetOptions{ss.GetSnapShot()}, ns_key, &metadata);
-  if (!s.ok()) {
+  if (!s.ok() && !s.IsNotFound()) return s;
+  if (s.IsNotFound()) {
     ret->resize(fields.size(), -2);
     return rocksdb::Status::OK();
   }
