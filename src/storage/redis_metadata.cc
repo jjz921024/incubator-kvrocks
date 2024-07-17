@@ -334,12 +334,12 @@ bool Metadata::IsEmptyableType() const {
 
 bool Metadata::Expired() const { return ExpireAt(util::GetTimeStampMS()); }
 
+bool HashMetadata::IsTTLFieldEncoded() const { return field_encoding == HashFieldEncoding::WITH_TTL; }
+
 void HashMetadata::Encode(std::string *dst) const {
   Metadata::Encode(dst);
-  if (is_ttl_field_encoded) {
-    uint8_t flag = 0;
-    flag |= METADATA_HASH_FIELD_EXPIRE_MASK;
-    PutFixed8(dst, flag);
+  if (IsTTLFieldEncoded()) {
+    PutFixed8(dst, uint8_t(field_encoding));
   }
 }
 
@@ -349,9 +349,9 @@ rocksdb::Status HashMetadata::Decode(Slice *input) {
   }
 
   if (input->size() >= 1) {
-    uint8_t flag = 0;
-    GetFixed8(input, &flag);
-    is_ttl_field_encoded = flag &= METADATA_HASH_FIELD_EXPIRE_MASK;
+    if (!GetFixed8(input, reinterpret_cast<uint8_t *>(&field_encoding))) {
+      return rocksdb::Status::InvalidArgument(kErrMetadataTooShort);
+    }
   }
 
   return rocksdb::Status::OK();

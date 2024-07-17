@@ -631,6 +631,115 @@ var testHash = func(t *testing.T, enabledRESP3 string) {
 		require.Equal(t, "b", rdb.HGet(ctx, "hash", strings.Repeat("k", 336)).Val())
 	})
 
+	t.Run("HFE expire a field of hash", func(t *testing.T) {
+		require.NoError(t, rdb.Del(ctx, "hfe-key").Err())
+		require.Equal(t, true, rdb.HMSet(ctx, "hfe-key", "f1", "v1").Val())
+		require.Equal(t, int64(1), rdb.Do(ctx, "HEXPIRE", "hfe-key", 1, "FIELDS", 1, "f1").Val().([]interface{})[0])
+
+		require.LessOrEqual(t, int64(0), rdb.Do(ctx, "HTTL", "hfe-key", "FIELDS", 1, "f1").Val().([]interface{})[0])
+		require.Equal(t, "v1", rdb.HGet(ctx, "hfe-key", "f1").Val())
+		time.Sleep(1 * time.Second)
+
+		require.Equal(t, int64(-2), rdb.Do(ctx, "HTTL", "hfe-key", "FIELDS", 1, "f1").Val().([]interface{})[0])
+		require.Equal(t, "", rdb.HGet(ctx, "hfe-key", "f1").Val())
+	})
+
+	t.Run("HFE expireat a field of hash", func(t *testing.T) {
+		require.NoError(t, rdb.Del(ctx, "hfe-key").Err())
+		require.Equal(t, true, rdb.HMSet(ctx, "hfe-key", "f1", "v1").Val())
+
+		expireTime := time.Now().Add(1 * time.Second).Unix()
+		require.Equal(t, int64(1), rdb.Do(ctx, "HEXPIREAT", "hfe-key", expireTime, "FIELDS", 1, "f1").Val().([]interface{})[0])
+		require.Equal(t, expireTime, rdb.Do(ctx, "HEXPIRETIME", "hfe-key", "FIELDS", 1, "f1").Val().([]interface{})[0])
+		require.Equal(t, "v1", rdb.HGet(ctx, "hfe-key", "f1").Val())
+		time.Sleep(1 * time.Second)
+
+		require.Equal(t, int64(-2), rdb.Do(ctx, "HEXPIREAT", "hfe-key", "FIELDS", 1, "f1").Val().([]interface{})[0])
+		require.Equal(t, "", rdb.HGet(ctx, "hfe-key", "f1").Val())
+	})
+
+	t.Run("HFE check the ttl of field that no associated expiration set and not exist", func(t *testing.T) {
+		require.NoError(t, rdb.Del(ctx, "hfe-key").Err())
+		require.Equal(t, true, rdb.HMSet(ctx, "hfe-key", "f1", "v1").Val())
+
+		ttl := rdb.Do(ctx, "HTTL", "hfe-key", "FIELDS", 2, "f1", "not-exist-field").Val().([]interface{})
+		require.EqualValues(t, []interface{}{int64(-1), int64(-2)}, ttl)
+		pttl := rdb.Do(ctx, "HPTTL", "hfe-key", "FIELDS", 2, "f1", "not-exist-field").Val().([]interface{})
+		require.EqualValues(t, []interface{}{int64(-1), int64(-2)}, pttl)
+
+		expireTime := rdb.Do(ctx, "HEXPIRETIME", "hfe-key", "FIELDS", 2, "f1", "not-exist-field").Val().([]interface{})
+		require.EqualValues(t, []interface{}{int64(-1), int64(-2)}, expireTime)
+		pexpireTime := rdb.Do(ctx, "HPEXPIRETIME", "hfe-key", "FIELDS", 2, "f1", "not-exist-field").Val().([]interface{})
+		require.EqualValues(t, []interface{}{int64(-1), int64(-2)}, pexpireTime)
+	})
+
+	t.Run("HFE can not get expired field", func(t *testing.T) {
+		require.NoError(t, rdb.Del(ctx, "hfe-key").Err())
+		fieldValue := map[string]string{
+			"f1": "v1",
+			"f2": "v2",
+		}
+		require.Equal(t, int64(2), rdb.HSet(ctx, "hfe-key", fieldValue).Val())
+		require.Equal(t, int64(1), rdb.Do(ctx, "HEXPIRE", "hfe-key", 1, "FIELDS", 1, "f1").Val().([]interface{})[0])
+
+		require.Equal(t, fieldValue, rdb.HGetAll(ctx, "hfe-key").Val())
+		require.Equal(t, []interface{}{"v1", "v2"}, rdb.HMGet(ctx, "hfe-key", "f1", "f2").Val())
+
+		time.Sleep(1 * time.Second)
+		delete(fieldValue, "f1")
+
+		require.Equal(t, fieldValue, rdb.HGetAll(ctx, "hfe-key").Val())
+		require.Equal(t, []interface{}{nil, "v2"}, rdb.HMGet(ctx, "hfe-key", "f1", "f2").Val())
+	})
+
+	t.Run("HFE check hashmeta for a all of fields expired", func(t *testing.T) {
+		require.NoError(t, rdb.Del(ctx, "hfe-key").Err())
+		require.Equal(t, true, rdb.HMSet(ctx, "hfe-key", "f1", "v1", "f2", "v2").Val())
+
+		require.Equal(t, "hash", rdb.Type(ctx, "hfe-key").Val())
+		require.Equal(t, int64(2), rdb.HLen(ctx, "hfe-key").Val())
+
+		rdb.Do(ctx, "HEXPIRE", "hfe-key", 1, "FIELDS", 2, "f1", "f2")
+		time.Sleep(1 * time.Second)
+
+		require.Equal(t, "none", rdb.Type(ctx, "hfe-key").Val())
+		require.Equal(t, int64(0), rdb.HLen(ctx, "hfe-key").Val())
+	})
+
+	t.Run("HFE expected 0 if delete a expired field", func(t *testing.T) {
+		require.NoError(t, rdb.Del(ctx, "hfe-key").Err())
+		require.Equal(t, true, rdb.HMSet(ctx, "hfe-key", "f1", "v1", "f2", "v2").Val())
+		rdb.Do(ctx, "HPEXPIRE", "hfe-key", 100, "FIELDS", 1, "f1")
+		time.Sleep(500 * time.Millisecond)
+		require.Equal(t, int64(0), rdb.HDel(ctx, "hfe-key", "f1").Val())
+	})
+
+	t.Run("HFE perist a field of hash", func(t *testing.T) {
+		require.NoError(t, rdb.Del(ctx, "hfe-key").Err())
+		require.Equal(t, true, rdb.HMSet(ctx, "hfe-key", "f1", "v1", "f2", "v2").Val())
+		rdb.Do(ctx, "HPEXPIRE", "hfe-key", 100, "FIELDS", 1, "f1")
+
+		result := rdb.Do(ctx, "HPERSIST", "hfe-key", "FIELDS", 3, "f1", "f2", "not-exist-field").Val().([]interface{})
+		require.EqualValues(t, []interface{}{int64(1), int64(-1), int64(-2)}, result)
+		require.Equal(t, int64(-1), rdb.Do(ctx, "HTTL", "hfe-key", "FIELDS", 1, "f1").Val().([]interface{})[0])
+	})
+
+	t.Run("HFE expired field should not be scan", func(t *testing.T) {
+		require.NoError(t, rdb.Del(ctx, "hfe-key").Err())
+		require.Equal(t, int64(2), rdb.HSet(ctx, "hfe-key", "f1", "v1", "f2", "v2").Val())
+
+		keys, cursor := rdb.HScan(ctx, "hfe-key", 0, "*", 10).Val()
+		require.Equal(t, []string{"f1", "v1", "f2", "v2"}, keys)
+		require.Equal(t, uint64(0), cursor)
+
+		rdb.Do(ctx, "HEXPIRE", "hfe-key", 1, "FIELDS", 1, "f1")
+		time.Sleep(1 * time.Second)
+
+		keys, cursor = rdb.HScan(ctx, "hfe-key", 0, "*", 10).Val()
+		require.Equal(t, []string{"f2", "v2"}, keys)
+		require.Equal(t, uint64(0), cursor)
+	})
+
 	for _, size := range []int64{10, 512} {
 		t.Run(fmt.Sprintf("Hash fuzzing #1 - %d fields", size), func(t *testing.T) {
 			for times := 0; times < 10; times++ {

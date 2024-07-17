@@ -558,9 +558,23 @@ rocksdb::Status SubKeyScanner::Scan(RedisType type, const Slice &user_key, const
   uint64_t cnt = 0;
   std::string ns_key = AppendNamespacePrefix(user_key);
   Metadata metadata(type, false);
+  std::string raw_value;
+  Slice rest;
   LatestSnapShot ss(storage_);
-  rocksdb::Status s = GetMetadata(GetOptions{ss.GetSnapShot()}, {type}, ns_key, &metadata);
+  rocksdb::Status s = GetMetadata(GetOptions{ss.GetSnapShot()}, {type}, ns_key, &raw_value, &metadata, &rest);
   if (!s.ok()) return s;
+
+  // for hash type, we should filter expired field if encoding is with_ttl
+  bool filter_expired_field = false;
+  if (metadata.Type() == kRedisHash && !rest.empty()) {
+    uint8_t field_encoding = 0;
+    if (!GetFixed8(&rest, reinterpret_cast<uint8_t *>(&field_encoding))) {
+      return rocksdb::Status::InvalidArgument();
+    }
+    if (field_encoding == 1) {
+      filter_expired_field = true;
+    }
+  }
 
   rocksdb::ReadOptions read_options = storage_->DefaultScanOptions();
   auto iter = util::UniqueIterator(storage_, read_options);
@@ -585,8 +599,7 @@ rocksdb::Status SubKeyScanner::Scan(RedisType type, const Slice &user_key, const
     }
     InternalKey ikey(iter->key(), storage_->IsSlotIdEncoded());
     auto value = iter->value().ToString();
-    // filter expired hash field
-    if (type == kRedisHash && (static_cast<HashMetadata*>(&metadata))->is_ttl_field_encoded) {
+    if (filter_expired_field) {
       uint64_t expire = 0;
       rocksdb::Slice data(value.data(), value.size());
       GetFixed64(&data, &expire);
@@ -667,17 +680,22 @@ rocksdb::Status Database::typeInternal(const Slice &key, RedisType *type) {
   if (!s.ok()) return s;
   if (metadata.Expired()) {
     *type = kRedisNone;
-  } else if (metadata.Type() == kRedisHash && (static_cast<HashMetadata*>(&metadata))->is_ttl_field_encoded) {
-    redis::Hash hash_db(storage_, namespace_);
-    auto [_, user_key] = ExtractNamespaceKey(key, storage_->IsSlotIdEncoded());
-    std::vector<FieldValue> field_values;
-    s = hash_db.GetAll(user_key, &field_values, HashFetchType::kOnlyKey);
-    if (!s.ok()) {
-      return s;
-    }
-    if (!field_values.empty()) {
+  } else if (metadata.Type() == kRedisHash) {
+    HashMetadata hash_metadata(false);
+    s = hash_metadata.Decode(value);
+    if (!s.ok()) return s;
+    if (!hash_metadata.IsTTLFieldEncoded()) {
       *type = metadata.Type();
-    } 
+    } else {
+      redis::Hash hash_db(storage_, namespace_);
+      auto [_, user_key] = ExtractNamespaceKey(key, storage_->IsSlotIdEncoded());
+      std::vector<FieldValue> field_values;
+      s = hash_db.GetAll(user_key, &field_values, HashFetchType::kOnlyKey);
+      if (!s.ok()) return s;
+      if (!field_values.empty()) {
+        *type = metadata.Type();
+      }
+    }
   } else {
     *type = metadata.Type();
   }

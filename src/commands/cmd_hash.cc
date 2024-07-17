@@ -460,7 +460,7 @@ class CommandFieldExpireBase : public Commander {
     }
 
     if (args.size() != idx + fields_num) {
-      return { Status::RedisParseErr, errWrongNumOfArguments };
+      return {Status::RedisParseErr, errWrongNumOfArguments};
     }
 
     for (size_t i = idx; i < args.size(); i++) {
@@ -479,7 +479,7 @@ class CommandFieldExpireBase : public Commander {
     }
 
     *output = redis::MultiLen(ret.size());
-    for (const auto i : ret) {
+    for (const auto &i : ret) {
       output->append(redis::Integer(i));
     }
 
@@ -504,8 +504,8 @@ class CommandHExpire : public CommandFieldExpireBase {
  public:
   Status Parse(const std::vector<std::string> &args) override {
     auto parse_result = ParseInt<uint64_t>(args[2], 10);
-    if (!parse_result) return { Status::RedisParseErr, errValueNotInteger };
-    
+    if (!parse_result) return {Status::RedisParseErr, errValueNotInteger};
+
     expire_ = *parse_result * 1000 + util::GetTimeStampMS();
     return CommandFieldExpireBase::commonParse(args, 3);
   }
@@ -519,12 +519,12 @@ class CommandHExpireAt : public CommandFieldExpireBase {
  public:
   Status Parse(const std::vector<std::string> &args) override {
     auto parse_result = ParseInt<uint64_t>(args[2], 10);
-    if (!parse_result) return { Status::RedisParseErr, errValueNotInteger };
-    
+    if (!parse_result) return {Status::RedisParseErr, errValueNotInteger};
+
     expire_ = *parse_result * 1000;
     return CommandFieldExpireBase::commonParse(args, 3);
   }
-  
+
   Status Execute(Server *srv, Connection *conn, std::string *output) override {
     return expireFieldExecute(srv, conn, output, false);
   }
@@ -534,8 +534,8 @@ class CommandHPExpire : public CommandFieldExpireBase {
  public:
   Status Parse(const std::vector<std::string> &args) override {
     auto parse_result = ParseInt<uint64_t>(args[2], 10);
-    if (!parse_result) return { Status::RedisParseErr, errValueNotInteger };
-    
+    if (!parse_result) return {Status::RedisParseErr, errValueNotInteger};
+
     expire_ = *parse_result + util::GetTimeStampMS();
     return CommandFieldExpireBase::commonParse(args, 3);
   }
@@ -549,8 +549,8 @@ class CommandHPExpireAt : public CommandFieldExpireBase {
  public:
   Status Parse(const std::vector<std::string> &args) override {
     auto parse_result = ParseInt<uint64_t>(args[2], 10);
-    if (!parse_result) return { Status::RedisParseErr, errValueNotInteger };
-    
+    if (!parse_result) return {Status::RedisParseErr, errValueNotInteger};
+
     expire_ = *parse_result;
     return CommandFieldExpireBase::commonParse(args, 3);
   }
@@ -562,9 +562,7 @@ class CommandHPExpireAt : public CommandFieldExpireBase {
 
 class CommandHExpireTime : public CommandFieldExpireBase {
  public:
-  Status Parse(const std::vector<std::string> &args) override {
-    return CommandFieldExpireBase::commonParse(args, 2);
-  }
+  Status Parse(const std::vector<std::string> &args) override { return CommandFieldExpireBase::commonParse(args, 2); }
 
   Status Execute(Server *srv, Connection *conn, std::string *output) override {
     std::vector<int64_t> ret;
@@ -574,12 +572,12 @@ class CommandHExpireTime : public CommandFieldExpireBase {
     }
     auto now = util::GetTimeStampMS();
     *output = redis::MultiLen(ret.size());
-    for (const auto ttl : ret) {
-      uint64_t expire = ttl;
+    for (const auto &ttl : ret) {
       if (ttl > 0) {
-        expire = (now + expire) / 1000;
+        output->append(redis::Integer((now + ttl) / 1000));
+      } else {
+        output->append(redis::Integer(ttl));
       }
-      output->append(redis::Integer(expire));
     }
     return Status::OK();
   }
@@ -587,9 +585,7 @@ class CommandHExpireTime : public CommandFieldExpireBase {
 
 class CommandHPExpireTime : public CommandFieldExpireBase {
  public:
-  Status Parse(const std::vector<std::string> &args) override {
-    return CommandFieldExpireBase::commonParse(args, 2);
-  }
+  Status Parse(const std::vector<std::string> &args) override { return CommandFieldExpireBase::commonParse(args, 2); }
 
   Status Execute(Server *srv, Connection *conn, std::string *output) override {
     std::vector<int64_t> ret;
@@ -599,12 +595,12 @@ class CommandHPExpireTime : public CommandFieldExpireBase {
     }
     auto now = util::GetTimeStampMS();
     *output = redis::MultiLen(ret.size());
-    for (const auto ttl : ret) {
-      uint64_t expire = ttl;
+    for (const auto &ttl : ret) {
       if (ttl > 0) {
-        expire = now + expire;
+        output->append(redis::Integer(now + ttl));
+      } else {
+        output->append(redis::Integer(ttl));
       }
-      output->append(redis::Integer(expire));
     }
     return Status::OK();
   }
@@ -612,9 +608,7 @@ class CommandHPExpireTime : public CommandFieldExpireBase {
 
 class CommandHTTL : public CommandFieldExpireBase {
  public:
-  Status Parse(const std::vector<std::string> &args) override {
-    return CommandFieldExpireBase::commonParse(args, 2);
-  }
+  Status Parse(const std::vector<std::string> &args) override { return CommandFieldExpireBase::commonParse(args, 2); }
 
   Status Execute(Server *srv, Connection *conn, std::string *output) override {
     std::vector<int64_t> ret;
@@ -623,7 +617,7 @@ class CommandHTTL : public CommandFieldExpireBase {
       return {Status::RedisExecErr, s.Msg()};
     }
     *output = redis::MultiLen(ret.size());
-    for (const auto ttl : ret) {
+    for (const auto &ttl : ret) {
       output->append(redis::Integer(ttl > 0 ? ttl / 1000 : ttl));
     }
     return Status::OK();
@@ -632,9 +626,7 @@ class CommandHTTL : public CommandFieldExpireBase {
 
 class CommandHPTTL : public CommandFieldExpireBase {
  public:
-  Status Parse(const std::vector<std::string> &args) override {
-    return CommandFieldExpireBase::commonParse(args, 2);
-  }
+  Status Parse(const std::vector<std::string> &args) override { return CommandFieldExpireBase::commonParse(args, 2); }
 
   Status Execute(Server *srv, Connection *conn, std::string *output) override {
     std::vector<int64_t> ret;
@@ -643,7 +635,7 @@ class CommandHPTTL : public CommandFieldExpireBase {
       return {Status::RedisExecErr, s.Msg()};
     }
     *output = redis::MultiLen(ret.size());
-    for (const auto ttl : ret) { 
+    for (const auto &ttl : ret) {
       output->append(redis::Integer(ttl));
     }
     return Status::OK();
@@ -652,9 +644,7 @@ class CommandHPTTL : public CommandFieldExpireBase {
 
 class CommandHPersist : public CommandFieldExpireBase {
  public:
-  Status Parse(const std::vector<std::string> &args) override {
-    return CommandFieldExpireBase::commonParse(args, 2);
-  }
+  Status Parse(const std::vector<std::string> &args) override { return CommandFieldExpireBase::commonParse(args, 2); }
 
   Status Execute(Server *srv, Connection *conn, std::string *output) override {
     // equivalent to setting the expiration time to 0
@@ -678,15 +668,15 @@ REDIS_REGISTER_COMMANDS(MakeCmdAttr<CommandHGet>("hget", 3, "read-only", 1, 1, 1
                         MakeCmdAttr<CommandHGetAll>("hgetall", 2, "read-only", 1, 1, 1),
                         MakeCmdAttr<CommandHScan>("hscan", -3, "read-only", 1, 1, 1),
                         MakeCmdAttr<CommandHRangeByLex>("hrangebylex", -4, "read-only", 1, 1, 1),
-                        MakeCmdAttr<CommandHRandField>("hrandfield", -2, "read-only", 1, 1, 1), 
-                        MakeCmdAttr<CommandHExpire>("hexpire", -6, "write", 1, 1, 1), 
-                        MakeCmdAttr<CommandHExpireAt>("hexpireat", -6, "write", 1, 1, 1), 
-                        MakeCmdAttr<CommandHExpireTime>("hexpiretime", -5, "read-only", 1, 1, 1), 
-                        MakeCmdAttr<CommandHPExpire>("hpexpire", -6, "write", 1, 1, 1), 
-                        MakeCmdAttr<CommandHPExpireAt>("hpexpireat", -6, "write", 1, 1, 1), 
-                        MakeCmdAttr<CommandHPExpireTime>("hpexpiretime", -5, "read-only", 1, 1, 1), 
-                        MakeCmdAttr<CommandHPersist>("hpersist", -5, "write", 1, 1, 1), 
-                        MakeCmdAttr<CommandHTTL>("httl", -5, "read-only", 1, 1, 1), 
+                        MakeCmdAttr<CommandHRandField>("hrandfield", -2, "read-only", 1, 1, 1),
+                        MakeCmdAttr<CommandHExpire>("hexpire", -6, "write", 1, 1, 1),
+                        MakeCmdAttr<CommandHExpireAt>("hexpireat", -6, "write", 1, 1, 1),
+                        MakeCmdAttr<CommandHExpireTime>("hexpiretime", -5, "read-only", 1, 1, 1),
+                        MakeCmdAttr<CommandHPExpire>("hpexpire", -6, "write", 1, 1, 1),
+                        MakeCmdAttr<CommandHPExpireAt>("hpexpireat", -6, "write", 1, 1, 1),
+                        MakeCmdAttr<CommandHPExpireTime>("hpexpiretime", -5, "read-only", 1, 1, 1),
+                        MakeCmdAttr<CommandHPersist>("hpersist", -5, "write", 1, 1, 1),
+                        MakeCmdAttr<CommandHTTL>("httl", -5, "read-only", 1, 1, 1),
                         MakeCmdAttr<CommandHPTTL>("hpttl", -5, "read-only", 1, 1, 1), )
 
 }  // namespace redis

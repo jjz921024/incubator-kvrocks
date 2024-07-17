@@ -46,7 +46,7 @@ rocksdb::Status Hash::Size(const Slice &user_key, uint64_t *size) {
   HashMetadata metadata(false);
   rocksdb::Status s = GetMetadata(Database::GetOptions{}, ns_key, &metadata);
   if (!s.ok()) return s;
-  if (!metadata.is_ttl_field_encoded) {
+  if (!metadata.IsTTLFieldEncoded()) {
     *size = metadata.size;
   } else {
     std::vector<FieldValue> field_values;
@@ -87,7 +87,7 @@ rocksdb::Status Hash::IncrBy(const Slice &user_key, const Slice &field, int64_t 
   if (s.ok()) {
     std::string value_bytes;
     s = storage_->Get(rocksdb::ReadOptions(), sub_key, &value_bytes);
-    if (!s.ok() && !s.IsNotFound()) return s;  
+    if (!s.ok() && !s.IsNotFound()) return s;
     if (s.ok() && decodeFieldAndTTL(metadata, &value_bytes, expire).ok()) {
       auto parse_result = ParseInt<int64_t>(value_bytes, 10);
       if (!parse_result) {
@@ -113,7 +113,7 @@ rocksdb::Status Hash::IncrBy(const Slice &user_key, const Slice &field, int64_t 
   WriteBatchLogData log_data(kRedisHash);
   batch->PutLogData(log_data.Encode());
   auto value_str = std::to_string(*new_value);
-  if (metadata.is_ttl_field_encoded) {
+  if (metadata.IsTTLFieldEncoded()) {
     encodeFieldAndTTL(&value_str, expire);
   }
   batch->Put(sub_key, value_str);
@@ -142,7 +142,7 @@ rocksdb::Status Hash::IncrByFloat(const Slice &user_key, const Slice &field, dou
   if (s.ok()) {
     std::string value_bytes;
     s = storage_->Get(rocksdb::ReadOptions(), sub_key, &value_bytes);
-    if (!s.ok() && !s.IsNotFound()) return s;  
+    if (!s.ok() && !s.IsNotFound()) return s;
     if (s.ok() && decodeFieldAndTTL(metadata, &value_bytes, expire).ok()) {
       auto value_stat = ParseFloat(value_bytes);
       if (!value_stat || isspace(value_bytes[0])) {
@@ -164,7 +164,7 @@ rocksdb::Status Hash::IncrByFloat(const Slice &user_key, const Slice &field, dou
   WriteBatchLogData log_data(kRedisHash);
   batch->PutLogData(log_data.Encode());
   auto value_str = std::to_string(*new_value);
-  if (metadata.is_ttl_field_encoded) {
+  if (metadata.IsTTLFieldEncoded()) {
     encodeFieldAndTTL(&value_str, expire);
   }
   batch->Put(sub_key, value_str);
@@ -295,7 +295,7 @@ rocksdb::Status Hash::MSet(const Slice &user_key, const std::vector<FieldValue> 
       std::string field_value;
       s = storage_->Get(rocksdb::ReadOptions(), sub_key, &field_value);
       if (!s.ok() && !s.IsNotFound()) return s;
-  
+
       if (s.ok()) {
         if (nx || field_value == it->value) continue;
         exists = decodeFieldAndTTL(metadata, &field_value, expire).ok();
@@ -308,7 +308,7 @@ rocksdb::Status Hash::MSet(const Slice &user_key, const std::vector<FieldValue> 
     }
 
     auto value = it->value;
-    if (metadata.is_ttl_field_encoded) {
+    if (metadata.IsTTLFieldEncoded()) {
       encodeFieldAndTTL(&value, expire);
     }
     batch->Put(sub_key, value);
@@ -472,9 +472,8 @@ rocksdb::Status Hash::RandField(const Slice &user_key, int64_t command_count, st
   return rocksdb::Status::OK();
 }
 
-rocksdb::Status Hash::ExpireFields(const Slice &user_key, uint64_t expire_ms, 
-                                  const std::vector<Slice> &fields, HashFieldExpireType type, 
-                                  bool is_persist, std::vector<int8_t> *ret) {
+rocksdb::Status Hash::ExpireFields(const Slice &user_key, uint64_t expire_ms, const std::vector<Slice> &fields,
+                                   HashFieldExpireType type, bool is_persist, std::vector<int8_t> *ret) {
   std::string ns_key = AppendNamespacePrefix(user_key);
   HashMetadata metadata(false);
   LatestSnapShot ss(storage_);
@@ -487,10 +486,14 @@ rocksdb::Status Hash::ExpireFields(const Slice &user_key, uint64_t expire_ms,
   rocksdb::ReadOptions read_options = storage_->DefaultMultiGetOptions();
   read_options.snapshot = ss.GetSnapShot();
 
-  std::vector<Slice> sub_keys;
-  sub_keys.reserve(fields.size());
-  for (auto field : fields) {
-    sub_keys.emplace_back(InternalKey(ns_key, field, metadata.version, storage_->IsSlotIdEncoded()).Encode());
+  std::vector<rocksdb::Slice> keys;
+  keys.reserve(fields.size());
+  std::vector<std::string> sub_keys;
+  sub_keys.resize(fields.size());
+  for (size_t i = 0; i < fields.size(); i++) {
+    auto &field = fields[i];
+    sub_keys[i] = InternalKey(ns_key, field, metadata.version, storage_->IsSlotIdEncoded()).Encode();
+    keys.emplace_back(sub_keys[i]);
   }
 
   auto batch = storage_->GetWriteBatchBase();
@@ -502,22 +505,21 @@ rocksdb::Status Hash::ExpireFields(const Slice &user_key, uint64_t expire_ms,
   values_vector.resize(sub_keys.size());
   std::vector<rocksdb::Status> statuses_vector;
   statuses_vector.resize(sub_keys.size());
-  storage_->MultiGet(read_options, storage_->GetDB()->DefaultColumnFamily(), sub_keys.size(), sub_keys.data(),
-                      values_vector.data(), statuses_vector.data());
+  storage_->MultiGet(read_options, storage_->GetDB()->DefaultColumnFamily(), keys.size(), keys.data(),
+                     values_vector.data(), statuses_vector.data());
 
   auto now = util::GetTimeStampMS();
-  for (size_t i = 0; i < sub_keys.size(); i++) {
+  for (size_t i = 0; i < keys.size(); i++) {
     if (!statuses_vector[i].ok() && !statuses_vector[i].IsNotFound()) return statuses_vector[i];
-    auto status = statuses_vector[i];
 
     // no such field exists
-    if (status.IsNotFound()) {
+    if (statuses_vector[i].IsNotFound()) {
       ret->emplace_back(-2);
       continue;
     }
 
     InternalKey sub_ikey(ns_key, fields[i], metadata.version, storage_->IsSlotIdEncoded());
-    
+
     // expire with a pass time
     if (expire_ms <= now && !is_persist) {
       batch->Delete(sub_ikey.Encode());
@@ -545,8 +547,8 @@ rocksdb::Status Hash::ExpireFields(const Slice &user_key, uint64_t expire_ms,
   }
 
   // convert rest field encoding
-  if (!metadata.is_ttl_field_encoded) {
-    metadata.is_ttl_field_encoded = true;
+  if (!metadata.IsTTLFieldEncoded()) {
+    metadata.field_encoding = HashFieldEncoding::WITH_TTL;
 
     std::unordered_set<std::string_view> field_set;
     for (auto field : fields) {
@@ -554,7 +556,7 @@ rocksdb::Status Hash::ExpireFields(const Slice &user_key, uint64_t expire_ms,
         continue;
       }
     }
-        
+
     std::string prefix_key = InternalKey(ns_key, "", metadata.version, storage_->IsSlotIdEncoded()).Encode();
     std::string next_version_prefix_key =
         InternalKey(ns_key, "", metadata.version + 1, storage_->IsSlotIdEncoded()).Encode();
@@ -592,8 +594,8 @@ rocksdb::Status Hash::TTLFields(const Slice &user_key, const std::vector<Slice> 
 
   rocksdb::ReadOptions read_options = storage_->DefaultMultiGetOptions();
   read_options.snapshot = ss.GetSnapShot();
-  std::vector<rocksdb::Slice> keys;
 
+  std::vector<rocksdb::Slice> keys;
   keys.reserve(fields.size());
   std::vector<std::string> sub_keys;
   sub_keys.resize(fields.size());
@@ -604,9 +606,9 @@ rocksdb::Status Hash::TTLFields(const Slice &user_key, const std::vector<Slice> 
   }
 
   std::vector<rocksdb::PinnableSlice> values_vector;
-  values_vector.resize(keys.size());
+  values_vector.resize(sub_keys.size());
   std::vector<rocksdb::Status> statuses_vector;
-  statuses_vector.resize(keys.size());
+  statuses_vector.resize(sub_keys.size());
   storage_->MultiGet(read_options, storage_->GetDB()->DefaultColumnFamily(), keys.size(), keys.data(),
                      values_vector.data(), statuses_vector.data());
 
@@ -636,7 +638,7 @@ rocksdb::Status Hash::TTLFields(const Slice &user_key, const std::vector<Slice> 
 }
 
 bool Hash::IsFieldExpired(Metadata &metadata, const Slice &value) {
-  if (!(static_cast<HashMetadata*>(&metadata))->is_ttl_field_encoded) {
+  if (!(static_cast<HashMetadata *>(&metadata))->IsTTLFieldEncoded()) {
     return false;
   }
   uint64_t expire = 0;
@@ -646,7 +648,7 @@ bool Hash::IsFieldExpired(Metadata &metadata, const Slice &value) {
 }
 
 rocksdb::Status Hash::decodeFieldAndTTL(const HashMetadata &metadata, std::string *value, uint64_t &expire) {
-  if (!metadata.is_ttl_field_encoded) {
+  if (!metadata.IsTTLFieldEncoded()) {
     return rocksdb::Status::OK();
   }
   rocksdb::Slice data(value->data(), value->size());
