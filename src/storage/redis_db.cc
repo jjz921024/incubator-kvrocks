@@ -684,7 +684,7 @@ rocksdb::Status Database::typeInternal(const Slice &key, RedisType *type) {
     HashMetadata hash_metadata(false);
     s = hash_metadata.Decode(value);
     if (!s.ok()) return s;
-    if (!hash_metadata.IsTTLFieldEncoded()) {
+    if (!hash_metadata.IsFieldExpirationEnabled()) {
       *type = metadata.Type();
     } else {
       redis::Hash hash_db(storage_, namespace_);

@@ -200,14 +200,14 @@ class Metadata {
   static uint64_t generateVersion();
 };
 
-enum class HashFieldEncoding : uint8_t {
+enum class HashSubkeyEncoding : uint8_t {
   RAW = 0,
   WITH_TTL = 1,
 };
 
 class HashMetadata : public Metadata {
  public:
-  HashFieldEncoding field_encoding = HashFieldEncoding::RAW;
+  HashSubkeyEncoding field_encoding = HashSubkeyEncoding::RAW;
 
   explicit HashMetadata(bool generate_version = true) : Metadata(kRedisHash, generate_version) {}
 
@@ -215,7 +215,7 @@ class HashMetadata : public Metadata {
   using Metadata::Decode;
   rocksdb::Status Decode(Slice *input) override;
 
-  bool IsTTLFieldEncoded() const;
+  bool IsFieldExpirationEnabled() const;
 };
 
 class SetMetadata : public Metadata {

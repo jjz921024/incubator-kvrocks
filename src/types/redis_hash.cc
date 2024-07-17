@@ -46,7 +46,7 @@ rocksdb::Status Hash::Size(const Slice &user_key, uint64_t *size) {
   HashMetadata metadata(false);
   rocksdb::Status s = GetMetadata(Database::GetOptions{}, ns_key, &metadata);
   if (!s.ok()) return s;
-  if (!metadata.IsTTLFieldEncoded()) {
+  if (!metadata.IsFieldExpirationEnabled()) {
     *size = metadata.size;
   } else {
     std::vector<FieldValue> field_values;
@@ -113,7 +113,7 @@ rocksdb::Status Hash::IncrBy(const Slice &user_key, const Slice &field, int64_t 
   WriteBatchLogData log_data(kRedisHash);
   batch->PutLogData(log_data.Encode());
   auto value_str = std::to_string(*new_value);
-  if (metadata.IsTTLFieldEncoded()) {
+  if (metadata.IsFieldExpirationEnabled()) {
     encodeFieldAndTTL(&value_str, expire);
   }
   batch->Put(sub_key, value_str);
@@ -164,7 +164,7 @@ rocksdb::Status Hash::IncrByFloat(const Slice &user_key, const Slice &field, dou
   WriteBatchLogData log_data(kRedisHash);
   batch->PutLogData(log_data.Encode());
   auto value_str = std::to_string(*new_value);
-  if (metadata.IsTTLFieldEncoded()) {
+  if (metadata.IsFieldExpirationEnabled()) {
     encodeFieldAndTTL(&value_str, expire);
   }
   batch->Put(sub_key, value_str);
@@ -308,7 +308,7 @@ rocksdb::Status Hash::MSet(const Slice &user_key, const std::vector<FieldValue> 
     }
 
     auto value = it->value;
-    if (metadata.IsTTLFieldEncoded()) {
+    if (metadata.IsFieldExpirationEnabled()) {
       encodeFieldAndTTL(&value, expire);
     }
     batch->Put(sub_key, value);
@@ -547,8 +547,8 @@ rocksdb::Status Hash::ExpireFields(const Slice &user_key, uint64_t expire_ms, co
   }
 
   // convert rest field encoding
-  if (!metadata.IsTTLFieldEncoded()) {
-    metadata.field_encoding = HashFieldEncoding::WITH_TTL;
+  if (!metadata.IsFieldExpirationEnabled()) {
+    metadata.field_encoding = HashSubkeyEncoding::WITH_TTL;
 
     std::unordered_set<std::string_view> field_set;
     for (auto field : fields) {
@@ -638,7 +638,7 @@ rocksdb::Status Hash::TTLFields(const Slice &user_key, const std::vector<Slice> 
 }
 
 bool Hash::IsFieldExpired(Metadata &metadata, const Slice &value) {
-  if (!(static_cast<HashMetadata *>(&metadata))->IsTTLFieldEncoded()) {
+  if (!(static_cast<HashMetadata *>(&metadata))->IsFieldExpirationEnabled()) {
     return false;
   }
   uint64_t expire = 0;
@@ -648,7 +648,7 @@ bool Hash::IsFieldExpired(Metadata &metadata, const Slice &value) {
 }
 
 rocksdb::Status Hash::decodeFieldAndTTL(const HashMetadata &metadata, std::string *value, uint64_t &expire) {
-  if (!metadata.IsTTLFieldEncoded()) {
+  if (!metadata.IsFieldExpirationEnabled()) {
     return rocksdb::Status::OK();
   }
   rocksdb::Slice data(value->data(), value->size());

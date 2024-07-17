@@ -334,13 +334,11 @@ bool Metadata::IsEmptyableType() const {
 
 bool Metadata::Expired() const { return ExpireAt(util::GetTimeStampMS()); }
 
-bool HashMetadata::IsTTLFieldEncoded() const { return field_encoding == HashFieldEncoding::WITH_TTL; }
+bool HashMetadata::IsFieldExpirationEnabled() const { return field_encoding == HashSubkeyEncoding::WITH_TTL; }
 
 void HashMetadata::Encode(std::string *dst) const {
   Metadata::Encode(dst);
-  if (IsTTLFieldEncoded()) {
-    PutFixed8(dst, uint8_t(field_encoding));
-  }
+  PutFixed8(dst, uint8_t(field_encoding));
 }
 
 rocksdb::Status HashMetadata::Decode(Slice *input) {
