@@ -68,7 +68,7 @@ class Hash : public SubKeyScanner {
   rocksdb::Status ExpireFields(const Slice &user_key, uint64_t expire_ms, const std::vector<Slice> &fields,
                                HashFieldExpireType type, bool is_persist, std::vector<int8_t> *ret);
   rocksdb::Status TTLFields(const Slice &user_key, const std::vector<Slice> &fields, std::vector<int64_t> *ret);
-  static bool IsFieldExpired(Metadata &metadata, const Slice &value);
+  static bool IsFieldExpired(HashMetadata &hash_metadata, const Slice &value);
 
  private:
   rocksdb::Status GetMetadata(Database::GetOptions get_options, const Slice &ns_key, HashMetadata *metadata);

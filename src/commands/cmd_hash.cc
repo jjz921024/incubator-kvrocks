@@ -433,44 +433,40 @@ class CommandHRandField : public Commander {
 class CommandFieldExpireBase : public Commander {
  protected:
   Status commonParse(const std::vector<std::string> &args, int start_idx) {
-    int idx = start_idx;
-    CommandParser parser(args, idx);
+    CommandParser parser(args, start_idx);
     std::string_view expire_flag, num_flag;
     uint64_t fields_num = 0;
     while (parser.Good()) {
       if (parser.EatEqICaseFlag("FIELDS", num_flag)) {
         fields_num = GET_OR_RET(parser.template TakeInt<uint64_t>());
-        idx += 2;
         break;
       } else if (parser.EatEqICaseFlag("NX", expire_flag)) {
-        idx += 1;
         field_expire_type_ = HashFieldExpireType::NX;
       } else if (parser.EatEqICaseFlag("XX", expire_flag)) {
-        idx += 1;
         field_expire_type_ = HashFieldExpireType::XX;
       } else if (parser.EatEqICaseFlag("GT", expire_flag)) {
-        idx += 1;
         field_expire_type_ = HashFieldExpireType::GT;
       } else if (parser.EatEqICaseFlag("LT", expire_flag)) {
-        idx += 1;
         field_expire_type_ = HashFieldExpireType::LT;
       } else {
         return parser.InvalidSyntax();
       }
     }
 
-    if (args.size() != idx + fields_num) {
+    auto remains = parser.Remains();
+    auto size = args.size();
+    if (remains != fields_num) {
       return {Status::RedisParseErr, errWrongNumOfArguments};
     }
 
-    for (size_t i = idx; i < args.size(); i++) {
+    for (size_t i = size - remains; i < size; i++) {
       fields_.emplace_back(args_[i]);
     }
 
     return Status::OK();
   }
 
-  Status expireFieldExecute(Server *srv, Connection *conn, std::string *output, bool is_persist) {
+  Status expireFieldExecute(Server *srv, Connection *conn, bool is_persist, std::string *output) {
     std::vector<int8_t> ret;
     redis::Hash hash_db(srv->storage, conn->GetNamespace());
     auto s = hash_db.ExpireFields(args_[1], expire_, fields_, field_expire_type_, is_persist, &ret);
@@ -511,7 +507,7 @@ class CommandHExpire : public CommandFieldExpireBase {
   }
 
   Status Execute(Server *srv, Connection *conn, std::string *output) override {
-    return expireFieldExecute(srv, conn, output, false);
+    return expireFieldExecute(srv, conn, false, output);
   }
 };
 
@@ -526,7 +522,7 @@ class CommandHExpireAt : public CommandFieldExpireBase {
   }
 
   Status Execute(Server *srv, Connection *conn, std::string *output) override {
-    return expireFieldExecute(srv, conn, output, false);
+    return expireFieldExecute(srv, conn, false, output);
   }
 };
 
@@ -541,7 +537,7 @@ class CommandHPExpire : public CommandFieldExpireBase {
   }
 
   Status Execute(Server *srv, Connection *conn, std::string *output) override {
-    return expireFieldExecute(srv, conn, output, false);
+    return expireFieldExecute(srv, conn, false, output);
   }
 };
 
@@ -556,7 +552,7 @@ class CommandHPExpireAt : public CommandFieldExpireBase {
   }
 
   Status Execute(Server *srv, Connection *conn, std::string *output) override {
-    return expireFieldExecute(srv, conn, output, false);
+    return expireFieldExecute(srv, conn, false, output);
   }
 };
 
@@ -648,7 +644,8 @@ class CommandHPersist : public CommandFieldExpireBase {
 
   Status Execute(Server *srv, Connection *conn, std::string *output) override {
     // equivalent to setting the expiration time to 0
-    return expireFieldExecute(srv, conn, output, true);
+    // but add a is_persist flag for distinguish the expireat command with 0
+    return expireFieldExecute(srv, conn, true, output);
   }
 };
 

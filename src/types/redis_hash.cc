@@ -519,11 +519,9 @@ rocksdb::Status Hash::ExpireFields(const Slice &user_key, uint64_t expire_ms, co
       continue;
     }
 
-    InternalKey sub_ikey(ns_key, fields[i], metadata.version, storage_->IsSlotIdEncoded());
-
     // expire with a pass time
     if (expire_ms <= now && !is_persist) {
-      batch->Delete(sub_ikey.Encode());
+      batch->Delete(sub_keys[i]);
       ret->emplace_back(2);
       metadata.size -= 1;
       continue;
@@ -534,7 +532,7 @@ rocksdb::Status Hash::ExpireFields(const Slice &user_key, uint64_t expire_ms, co
     decodeFieldAndTTL(metadata, &value, field_expire);
     if (isMeetCondition(type, expire_ms, field_expire)) {
       encodeFieldAndTTL(&value, expire_ms);
-      batch->Put(sub_ikey.Encode(), value);
+      batch->Put(sub_keys[i], value);
       if (is_persist && field_expire == 0) {
         // for hpersist command, -1 if the field exists but has no associated expiration
         ret->emplace_back(-1);
@@ -639,8 +637,8 @@ rocksdb::Status Hash::TTLFields(const Slice &user_key, const std::vector<Slice> 
   return rocksdb::Status::OK();
 }
 
-bool Hash::IsFieldExpired(Metadata &metadata, const Slice &value) {
-  if (!(static_cast<HashMetadata *>(&metadata))->IsFieldExpirationEnabled()) {
+bool Hash::IsFieldExpired(HashMetadata &hash_metadata, const Slice &value) {
+  if (!hash_metadata.IsFieldExpirationEnabled()) {
     return false;
   }
   uint64_t expire = 0;

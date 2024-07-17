@@ -132,9 +132,18 @@ bool SubKeyFilter::Filter(int level, const Slice &key, const Slice &value, std::
     return false;
   }
 
-  return IsMetadataExpired(ikey, metadata) ||
-         (metadata.Type() == kRedisBitmap && redis::Bitmap::IsEmptySegment(value)) ||
-         (metadata.Type() == kRedisHash && redis::Hash::IsFieldExpired(metadata, value));
+  if (metadata.Type() == kRedisHash) {
+    HashMetadata hash_metadata(false);
+    Slice bytes(cached_metadata_);
+    if (!hash_metadata.Decode(bytes).ok()) {
+      LOG(ERROR) << "[compact_filter/subkey] Failed to get hash_metadata"
+                 << ", namespace: " << ikey.GetNamespace() << ", key: " << ikey.GetKey() << ", err: " << s.Msg();
+      return false;
+    }
+    return redis::Hash::IsFieldExpired(hash_metadata, value);
+  }
+
+  return IsMetadataExpired(ikey, metadata) || (metadata.Type() == kRedisBitmap && redis::Bitmap::IsEmptySegment(value));
 }
 
 }  // namespace engine

@@ -752,6 +752,31 @@ var testHash = func(t *testing.T, enabledRESP3 string) {
 		require.ErrorContains(t, rdb.Do(ctx, "HPEXPIRETIME", "k", "FIELDS", 1, "f").Err(), "WRONGTYPE")
 	})
 
+	t.Run("HEF syntax check", func(t *testing.T) {
+		require.ErrorContains(t, rdb.Do(ctx, "HEXPIRE", "k", 1, "FIELDSS", 1, "f1").Err(), "syntax error")
+		require.ErrorContains(t, rdb.Do(ctx, "HTTL", "k", 1, "FIELDSS", 1, "f1").Err(), "syntax error")
+		require.ErrorContains(t, rdb.Do(ctx, "HEXPIRE", "k", "FIELDSS", 1, "f1").Err(), "syntax error")
+		require.ErrorContains(t, rdb.Do(ctx, "HEXPIRE", "k", 1, "FIELDS", 1, "f1", "f2").Err(), "wrong number of arguments")
+		require.ErrorContains(t, rdb.Do(ctx, "HEXPIRE", "k", 1, "FIELDS", 2, "f1").Err(), "wrong number of arguments")
+		require.ErrorContains(t, rdb.Do(ctx, "HEXPIRE", "k", 1, "FIELDS", 0, "f1").Err(), "wrong number of arguments")
+		require.ErrorContains(t, rdb.Do(ctx, "HEXPIRE", "k", 1, "FIELDS", 0).Err(), "wrong number of arguments")
+		require.ErrorContains(t, rdb.Do(ctx, "HEXPIRE", "k", 1, "FIELDS", -1, "f1").Err(), "wrong number of arguments")
+	})
+
+	t.Run("HFE expire or expireat with a pass time", func(t *testing.T) {
+		require.NoError(t, rdb.Del(ctx, "hfe-key").Err())
+
+		require.Equal(t, int64(1), rdb.HSet(ctx, "hfe-key", "f1", "v1").Val())
+		require.Equal(t, int64(2), rdb.Do(ctx, "HEXPIRE", "hfe-key", 0, "FIELDS", 1, "f1").Val().([]interface{})[0])
+		require.Equal(t, int64(-2), rdb.Do(ctx, "HTTL", "hfe-key", "FIELDS", 1, "f1").Val().([]interface{})[0])
+		require.Equal(t, "", rdb.HGet(ctx, "hfe-key", "f1").Val())
+
+		require.Equal(t, int64(1), rdb.HSet(ctx, "hfe-key", "f1", "v1").Val())
+		require.Equal(t, int64(2), rdb.Do(ctx, "HEXPIREAT", "hfe-key", 0, "FIELDS", 1, "f1").Val().([]interface{})[0])
+		require.Equal(t, int64(-2), rdb.Do(ctx, "HTTL", "hfe-key", "FIELDS", 1, "f1").Val().([]interface{})[0])
+		require.Equal(t, "", rdb.HGet(ctx, "hfe-key", "f1").Val())
+	})
+
 	for _, size := range []int64{10, 512} {
 		t.Run(fmt.Sprintf("Hash fuzzing #1 - %d fields", size), func(t *testing.T) {
 			for times := 0; times < 10; times++ {

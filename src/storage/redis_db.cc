@@ -565,14 +565,14 @@ rocksdb::Status SubKeyScanner::Scan(RedisType type, const Slice &user_key, const
   if (!s.ok()) return s;
 
   // for hash type, we should filter expired field if encoding is with_ttl
-  bool filter_expired_field = false;
+  bool is_encoding_field_ttl = false;
   if (metadata.Type() == kRedisHash && !rest.empty()) {
     uint8_t field_encoding = 0;
-    if (!GetFixed8(&rest, reinterpret_cast<uint8_t *>(&field_encoding))) {
+    if (!GetFixed8(&rest, &field_encoding)) {
       return rocksdb::Status::InvalidArgument();
     }
     if (field_encoding == 1) {
-      filter_expired_field = true;
+      is_encoding_field_ttl = true;
     }
   }
 
@@ -599,7 +599,7 @@ rocksdb::Status SubKeyScanner::Scan(RedisType type, const Slice &user_key, const
     }
     InternalKey ikey(iter->key(), storage_->IsSlotIdEncoded());
     auto value = iter->value().ToString();
-    if (filter_expired_field) {
+    if (is_encoding_field_ttl) {
       uint64_t expire = 0;
       rocksdb::Slice data(value.data(), value.size());
       GetFixed64(&data, &expire);
