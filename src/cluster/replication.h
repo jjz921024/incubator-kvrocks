@@ -31,6 +31,7 @@
 #include <utility>
 #include <vector>
 
+#include "cluster/observer.h"
 #include "event_util.h"
 #include "io_util.h"
 #include "server/redis_connection.h"
@@ -60,15 +61,88 @@ enum WriteBatchType {
 
 using FetchFileCallback = std::function<void(const std::string &, uint32_t)>;
 
-class FeedSlaveThread {
+class FeedSlaveThread;
+
+class TransmitStartEvent : public ObserverEvent {
+ public:
+  explicit TransmitStartEvent(int fd, FeedSlaveThread *target_thread)
+      : ObserverEvent(), conn_fd(fd), thread_ptr(target_thread) {}
+  int conn_fd;
+  FeedSlaveThread *thread_ptr;
+};
+
+class BeforeSendEvent : public ObserverEvent {};
+
+class AfterSendEvent : public ObserverEvent {
+ public:
+  explicit AfterSendEvent(int fd, uint64_t sequence) : ObserverEvent(), conn_fd(fd), sequence_number(sequence) {}
+  int conn_fd;
+  uint64_t sequence_number;
+};
+
+class TransmitEndEvent : public ObserverEvent {
+ public:
+  explicit TransmitEndEvent(FeedSlaveThread *target_thread) : ObserverEvent(), thread_ptr(target_thread) {}
+  FeedSlaveThread *thread_ptr;
+};
+
+class SyncStatusChangeEvent : public ObserverEvent {
+ public:
+  SyncStatusChangeEvent() : ObserverEvent() {}
+  int conn_fd = 0;
+  uint64_t last_sequence_number_end = 0;
+};
+
+class FeedSlaveHandler : public EventHandler {
+ public:
+  FeedSlaveHandler() : EventHandler() {
+    RegisterEventHandler<TransmitStartEvent>([](auto &&p_h1, auto &&p_h2) {
+      transmitStart(std::forward<decltype(p_h1)>(p_h1), std::forward<decltype(p_h2)>(p_h2));
+    });
+    RegisterEventHandler<BeforeSendEvent>([](auto &&p_h1, auto &&p_h2) {
+      beforeSend(std::forward<decltype(p_h1)>(p_h1), std::forward<decltype(p_h2)>(p_h2));
+    });
+    RegisterEventHandler<AfterSendEvent>([](auto &&p_h1, auto &&p_h2) {
+      afterSend(std::forward<decltype(p_h1)>(p_h1), std::forward<decltype(p_h2)>(p_h2));
+    });
+    RegisterEventHandler<TransmitEndEvent>([](auto &&p_h1, auto &&p_h2) {
+      transmitEnd(std::forward<decltype(p_h1)>(p_h1), std::forward<decltype(p_h2)>(p_h2));
+    });
+  }
+
+ private:
+  static void transmitStart(Observable const &subject, ObserverEvent const &event);
+  static void beforeSend(Observable const &subject, ObserverEvent const &event);
+  static void afterSend(Observable const &subject, ObserverEvent const &event);
+  static void transmitEnd(Observable const &subject, ObserverEvent const &event);
+};
+
+class FeedStatusHandler : public EventHandler {
+ public:
+  FeedStatusHandler() : EventHandler() {
+    RegisterEventHandler<SyncStatusChangeEvent>([](auto &&p_h1, auto &&p_h2) {
+      syncStatusChange(std::forward<decltype(p_h1)>(p_h1), std::forward<decltype(p_h2)>(p_h2));
+    });
+  }
+
+ private:
+  static void syncStatusChange(Observable const &subject, ObserverEvent const &event);
+};
+
+class FeedSlaveThread : public Observable {
  public:
   explicit FeedSlaveThread(Server *srv, redis::Connection *conn, rocksdb::SequenceNumber next_repl_seq)
-      : srv_(srv), conn_(conn), next_repl_seq_(next_repl_seq) {}
-  ~FeedSlaveThread() = default;
+      : srv_(srv), conn_(conn), next_repl_seq_(next_repl_seq) {
+    RegisterObserver(syncSlaveHandler.get());
+    RegisterObserver(syncStatusHandler.get());
+  }
+  ~FeedSlaveThread() override = default;
 
   Status Start();
   void Stop();
   void Join();
+  void Pause(const uint32_t &micro_time_out);
+  void Wakeup();
   bool IsStopped() { return stop_; }
   redis::Connection *GetConn() { return conn_.get(); }
   rocksdb::SequenceNumber GetCurrentReplSeq() {
@@ -77,13 +151,18 @@ class FeedSlaveThread {
   }
 
  private:
+  static const std::unique_ptr<FeedSlaveHandler> syncSlaveHandler;
+  static const std::unique_ptr<FeedStatusHandler> syncStatusHandler;
   uint64_t interval_ = 0;
   std::atomic<bool> stop_ = false;
+  std::atomic<bool> pause_ = false;
   Server *srv_ = nullptr;
   std::unique_ptr<redis::Connection> conn_ = nullptr;
   std::atomic<rocksdb::SequenceNumber> next_repl_seq_ = 0;
   std::thread t_;
   std::unique_ptr<rocksdb::TransactionLogIterator> iter_ = nullptr;
+  std::mutex mutex_;
+  std::condition_variable cv_;
 
   static const size_t kMaxDelayUpdates = 16;
   static const size_t kMaxDelayBytes = 16 * 1024;

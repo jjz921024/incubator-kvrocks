@@ -30,9 +30,11 @@
 #include <atomic>
 #include <csignal>
 #include <future>
+#include <memory>
 #include <string>
 #include <thread>
 
+#include "cluster/semi_sync_master.h"
 #include "commands/error_constants.h"
 #include "event_util.h"
 #include "fmt/format.h"
@@ -53,6 +55,46 @@
 #include <openssl/ssl.h>
 #endif
 
+thread_local bool REP_SEMI_SYNC_SLAVE = false;
+
+const std::unique_ptr<FeedSlaveHandler> FeedSlaveThread::syncSlaveHandler = std::make_unique<FeedSlaveHandler>();
+const std::unique_ptr<FeedStatusHandler> FeedSlaveThread::syncStatusHandler = std::make_unique<FeedStatusHandler>();
+
+void FeedSlaveHandler::transmitStart([[maybe_unused]] Observable const &subject, ObserverEvent const &event) {
+  if (REP_SEMI_SYNC_SLAVE) return;
+
+  REP_SEMI_SYNC_SLAVE = true;
+  const auto *ev = dynamic_cast<const TransmitStartEvent *>(&event);
+
+  ReplSemiSyncMaster &repl_semi_sync = ReplSemiSyncMaster::GetInstance();
+  repl_semi_sync.AddSlave(ev->thread_ptr);
+  repl_semi_sync.HandleAck(ev->conn_fd, ev->thread_ptr->GetCurrentReplSeq());
+}
+
+void FeedSlaveHandler::beforeSend([[maybe_unused]] Observable const &subject, [[maybe_unused]] ObserverEvent const &event) {
+
+}
+
+void FeedSlaveHandler::afterSend([[maybe_unused]] Observable const &subject, ObserverEvent const &event) {
+  const auto *ev = dynamic_cast<const AfterSendEvent *>(&event);
+  ReplSemiSyncMaster::GetInstance().HandleAck(ev->conn_fd, ev->sequence_number);
+}
+
+void FeedSlaveHandler::transmitEnd([[maybe_unused]] Observable const &subject, ObserverEvent const &event) {
+  if (!REP_SEMI_SYNC_SLAVE) return;
+
+  REP_SEMI_SYNC_SLAVE = false;
+  ReplSemiSyncMaster &repl_semi_sync = ReplSemiSyncMaster::GetInstance();
+  const auto *ev = dynamic_cast<const TransmitEndEvent *>(&event);
+  repl_semi_sync.RemoveSlave(ev->thread_ptr);
+}
+
+void FeedStatusHandler::syncStatusChange([[maybe_unused]] Observable const &subject, ObserverEvent const &event) {
+  const auto *ev = dynamic_cast<const SyncStatusChangeEvent *>(&event);
+  ReplSemiSyncMaster &repl_semi_sync = ReplSemiSyncMaster::GetInstance();
+  repl_semi_sync.HandleAck(ev->conn_fd, ev->last_sequence_number_end);
+}
+
 Status FeedSlaveThread::Start() {
   auto s = util::CreateThread("feed-replica", [this] {
     sigset_t mask, omask;
@@ -67,6 +109,10 @@ Status FeedSlaveThread::Start() {
       LOG(ERROR) << "failed to send OK response to the replica: " << s.Msg();
       return;
     }
+
+    TransmitStartEvent ev(conn_->GetFD(), this);
+    NotifyObservers(ev);
+
     this->loop();
   });
 
@@ -82,6 +128,24 @@ Status FeedSlaveThread::Start() {
 void FeedSlaveThread::Stop() {
   stop_ = true;
   LOG(WARNING) << "Slave thread was terminated, would stop feeding the slave: " << conn_->GetAddr();
+
+  TransmitEndEvent ev(this);
+  NotifyObservers(ev);
+}
+
+void FeedSlaveThread::Pause(const uint32_t &micro_time_out) {
+  std::unique_lock<std::mutex> lock(mutex_);
+  pause_ = true;
+  cv_.wait_for(lock, std::chrono::microseconds(micro_time_out));
+}
+
+void FeedSlaveThread::Wakeup() {
+  mutex_.lock();
+  if (pause_) {
+    cv_.notify_all();
+    pause_ = false;
+  }
+  mutex_.unlock();
 }
 
 void FeedSlaveThread::Join() {
@@ -115,7 +179,7 @@ void FeedSlaveThread::loop() {
       if (iter_) LOG(INFO) << "WAL was rotated, would reopen again";
       if (!srv_->storage->WALHasNewData(curr_seq) || !srv_->storage->GetWALIter(curr_seq, &iter_).IsOK()) {
         iter_ = nullptr;
-        usleep(yield_microseconds);
+        Pause(yield_microseconds);
         checkLivenessIfNeed();
         continue;
       }
@@ -123,12 +187,17 @@ void FeedSlaveThread::loop() {
     // iter_ would be always valid here
     auto batch = iter_->GetBatch();
     if (batch.sequence != curr_seq) {
-      LOG(ERROR) << "Fatal error encountered, WAL iterator is discrete, some seq might be lost"
-                 << ", sequence " << curr_seq << " expected, but got " << batch.sequence;
+      LOG(ERROR) << "Fatal error encountered, WAL iterator is discrete, some seq might be lost" << ", sequence "
+                 << curr_seq << " expected, but got " << batch.sequence;
       Stop();
       return;
     }
     updates_in_batches += batch.writeBatchPtr->Count();
+
+    // notify
+    AfterSendEvent ev(conn_->GetFD(), batch.sequence);
+    NotifyObservers(ev);
+
     batches_bulk += redis::BulkString(batch.writeBatchPtr->Data());
     // 1. We must send the first replication batch, as said above.
     // 2. To avoid frequently calling 'write' system call to send replication stream,
@@ -157,7 +226,7 @@ void FeedSlaveThread::loop() {
     curr_seq = batch.sequence + batch.writeBatchPtr->Count();
     next_repl_seq_.store(curr_seq);
     while (!IsStopped() && !srv_->storage->WALHasNewData(curr_seq)) {
-      usleep(yield_microseconds);
+      Pause(yield_microseconds);
       checkLivenessIfNeed();
     }
     iter_->Next();
@@ -471,8 +540,7 @@ ReplicationThread::CBState ReplicationThread::replConfReadCB(bufferevent *bev) {
   // on unknown option: first try without announce ip, if it fails again - do nothing (to prevent infinite loop)
   if (isUnknownOption(line.View()) && !next_try_without_announce_ip_address_) {
     next_try_without_announce_ip_address_ = true;
-    LOG(WARNING) << "The old version master, can't handle ip-address, "
-                 << "try without it again";
+    LOG(WARNING) << "The old version master, can't handle ip-address, " << "try without it again";
     // Retry previous state, i.e. send replconf again
     return CBState::PREV;
   }
@@ -538,8 +606,7 @@ ReplicationThread::CBState ReplicationThread::tryPSyncReadCB(bufferevent *bev) {
 
   if (line[0] == '-' && isWrongPsyncNum(line.View())) {
     next_try_old_psync_ = true;
-    LOG(WARNING) << "The old version master, can't handle new PSYNC, "
-                 << "try old PSYNC again";
+    LOG(WARNING) << "The old version master, can't handle new PSYNC, " << "try old PSYNC again";
     // Retry previous state, i.e. send PSYNC again
     return CBState::PREV;
   }
@@ -802,10 +869,9 @@ Status ReplicationThread::parallelFetchFile(const std::string &dir,
             fetch_cnt.fetch_add(1);
             uint32_t cur_skip_cnt = skip_cnt.load();
             uint32_t cur_fetch_cnt = fetch_cnt.load();
-            LOG(INFO) << "[fetch] "
-                      << "Fetched " << fetch_file << ", crc32: " << fetch_crc << ", skip count: " << cur_skip_cnt
-                      << ", fetch count: " << cur_fetch_cnt << ", progress: " << cur_skip_cnt + cur_fetch_cnt << "/"
-                      << files_count;
+            LOG(INFO) << "[fetch] " << "Fetched " << fetch_file << ", crc32: " << fetch_crc
+                      << ", skip count: " << cur_skip_cnt << ", fetch count: " << cur_fetch_cnt
+                      << ", progress: " << cur_skip_cnt + cur_fetch_cnt << "/" << files_count;
           };
           // For master using old version, it only supports to fetch a single file by one
           // command, so we need to fetch all files by multiple command interactions.

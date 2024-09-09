@@ -36,6 +36,7 @@
 #include <utility>
 #include <vector>
 
+#include "cluster/observer.h"
 #include "common/port.h"
 #include "config/config.h"
 #include "lock_manager.h"
@@ -199,10 +200,28 @@ class ColumnFamilyConfigs {
 
 struct Context;
 
-class Storage {
+class AfterCommitEvent : public ObserverEvent {
+ public:
+  explicit AfterCommitEvent(uint64_t commit_seq) : ObserverEvent(), sequence_number(commit_seq) {}
+  uint64_t sequence_number;
+};
+
+class StorageHandler : public EventHandler {
+ public:
+  StorageHandler() : EventHandler() {
+    RegisterEventHandler<AfterCommitEvent>([](auto &&p_h1, auto &&p_h2) {
+      afterCommit(std::forward<decltype(p_h1)>(p_h1), std::forward<decltype(p_h2)>(p_h2));
+    });
+  }
+
+ private:
+  static void afterCommit(Observable const &subject, ObserverEvent const &event);
+};
+
+class Storage : public Observable {
  public:
   explicit Storage(Config *config);
-  ~Storage();
+  ~Storage() override;
 
   void SetWriteOptions(const Config::RocksDB::WriteOptions &config);
   Status Open(DBOpenMode mode = kDBOpenModeDefault);
@@ -357,6 +376,7 @@ class Storage {
   bool db_closing_ = true;
 
   std::atomic<bool> db_in_retryable_io_error_{false};
+  std::unique_ptr<StorageHandler> handler_ = std::make_unique<StorageHandler>();
 
   std::atomic<bool> is_txn_mode_ = false;
   // txn_write_batch_ is used as the global write batch for the transaction mode,
@@ -367,7 +387,7 @@ class Storage {
   // command, so it won't have multi transactions to be executed at the same time.
   std::unique_ptr<rocksdb::WriteBatchWithIndex> txn_write_batch_;
 
-  rocksdb::WriteOptions default_write_opts_ = rocksdb::WriteOptions();
+  rocksdb::WriteOptions default_write_opts_;
 
   rocksdb::Status writeToDB(engine::Context &ctx, const rocksdb::WriteOptions &options, rocksdb::WriteBatch *updates);
   void recordKeyspaceStat(const rocksdb::ColumnFamilyHandle *column_family, const rocksdb::Status &s);

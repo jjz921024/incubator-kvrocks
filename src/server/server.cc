@@ -46,6 +46,7 @@
 #include "storage/redis_db.h"
 #include "storage/scripting.h"
 #include "storage/storage.h"
+#include "cluster/semi_sync_master.h"
 #include "string_util.h"
 #include "thread_util.h"
 #include "time_util.h"
@@ -159,7 +160,7 @@ Status Server::Start() {
 
   if (!config_->cluster_enabled) {
     GET_OR_RET(index_mgr.Load(kDefaultNamespace));
-    for (auto [_, ns] : namespace_.List()) {
+    for (const auto& [_, ns] : namespace_.List()) {
       GET_OR_RET(index_mgr.Load(ns));
     }
   }
@@ -1052,6 +1053,19 @@ void Server::GetReplicationInfo(std::string *info) {
   *info = string_stream.str();
 }
 
+void Server::GetReplicationSyncInfo(std::string *info) {
+  auto& repl_semisync = ReplSemiSyncMaster::GetInstance();
+  std::ostringstream string_stream;
+  bool semi_sync_enabled = repl_semisync.GetSemiSyncEnabled();
+  string_stream << "# Sync\r\n";
+  string_stream << "type:" << (semi_sync_enabled && repl_semisync.IsOn() ? "semi-sync" : "async") << "\r\n";
+  if (semi_sync_enabled) {
+    string_stream << "wait_for_slave_count:" <<
+      (repl_semisync.IsOn() ? config_->semi_sync_wait_for_slave_count : 0) << "\r\n";
+  }
+  *info = string_stream.str();
+}
+
 void Server::GetRoleInfo(std::string *info) {
   if (IsSlave()) {
     std::vector<std::string> roles;
@@ -1231,6 +1245,13 @@ void Server::GetInfo(const std::string &ns, const std::string &section, std::str
   if (!is_loading_ && (all || section == "replication")) {
     std::string replication_info;
     GetReplicationInfo(&replication_info);
+    if (section_cnt++) string_stream << "\r\n";
+    string_stream << replication_info;
+  }
+
+  if (!is_loading_ && (all || section == "sync")) {
+    std::string replication_info;
+    GetReplicationSyncInfo(&replication_info);
     if (section_cnt++) string_stream << "\r\n";
     string_stream << replication_info;
   }

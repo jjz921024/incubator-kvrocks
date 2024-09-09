@@ -49,6 +49,7 @@
 #include "table_properties_collector.h"
 #include "time_util.h"
 #include "unique_fd.h"
+#include "cluster/semi_sync_master.h"
 
 namespace engine {
 
@@ -75,6 +76,11 @@ const int64_t kIORateLimitMaxMb = 1024000;
 
 using rocksdb::Slice;
 
+void StorageHandler::afterCommit([[maybe_unused]] Observable const &subject, ObserverEvent const& event) {
+  const auto* ev = dynamic_cast<const AfterCommitEvent*>(&event);
+  ReplSemiSyncMaster::GetInstance().CommitTrx(ev->sequence_number);
+}
+
 Storage::Storage(Config *config)
     : backup_creating_time_secs_(util::GetTimeStamp<std::chrono::seconds>()),
       env_(rocksdb::Env::Default()),
@@ -83,6 +89,10 @@ Storage::Storage(Config *config)
       db_stats_(std::make_unique<DBStats>()) {
   Metadata::InitVersionCounter();
   SetWriteOptions(config->rocks_db.write_options);
+
+  ReplSemiSyncMaster& instance = ReplSemiSyncMaster::GetInstance();
+  instance.Initalize(config);
+  RegisterObserver(handler_.get());
 }
 
 Storage::~Storage() {
@@ -694,7 +704,18 @@ rocksdb::Status Storage::Write(engine::Context &ctx, const rocksdb::WriteOptions
     // The batch won't be flushed until the transaction was committed or rollback
     return rocksdb::Status::OK();
   }
-  return writeToDB(ctx, options, updates);
+
+  auto s = writeToDB(ctx, options, updates);
+
+  if (updates->Count() != 0 && ReplSemiSyncMaster::GetInstance().GetSemiSyncEnabled()) {
+    std::string t = updates->Data();
+    uint64_t seq = 0;
+    memcpy(&seq, t.data(), sizeof(seq));
+    AfterCommitEvent ev(seq);
+    NotifyObservers(ev);
+  }
+
+  return s;
 }
 
 rocksdb::Status Storage::writeToDB(engine::Context &ctx, const rocksdb::WriteOptions &options,
