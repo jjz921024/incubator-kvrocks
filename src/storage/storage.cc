@@ -76,6 +76,8 @@ const int64_t kIORateLimitMaxMb = 1024000;
 
 using rocksdb::Slice;
 
+// 在write db后触发
+// 会阻塞当前线程, 直到有从节点同步到seq
 void StorageHandler::afterCommit([[maybe_unused]] Observable const &subject, ObserverEvent const& event) {
   const auto* ev = dynamic_cast<const AfterCommitEvent*>(&event);
   ReplSemiSyncMaster::GetInstance().CommitTrx(ev->sequence_number);
@@ -705,9 +707,15 @@ rocksdb::Status Storage::Write(engine::Context &ctx, const rocksdb::WriteOptions
     return rocksdb::Status::OK();
   }
 
+  ReplSemiSyncMaster& instance = ReplSemiSyncMaster::GetInstance();
+  bool is_enabled = instance.IsSemiSyncEnabled();
+  if (is_enabled && !instance.IsOn() && !instance.IsAutoFallBack()) {
+    return rocksdb::Status::Incomplete("not enough replica node for semi sync");
+  }
+
   auto s = writeToDB(ctx, options, updates);
 
-  if (updates->Count() != 0 && ReplSemiSyncMaster::GetInstance().GetSemiSyncEnabled()) {
+  if (is_enabled && updates->Count() != 0) {
     std::string t = updates->Data();
     uint64_t seq = 0;
     memcpy(&seq, t.data(), sizeof(seq));

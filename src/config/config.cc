@@ -199,6 +199,7 @@ Config::Config() {
       /* semi sync */
       {"semi-sync-enable", false, new YesNoField(&semi_sync_enable, false)},
       {"semi-sync-wait-for-slave-count", false, new IntField(&semi_sync_wait_for_slave_count, 1, 0, INT_MAX)},
+      {"semi-sync-auto-fall-back", false, new YesNoField(&semi_sync_auto_fall_back, true)},
 
       /* rocksdb options */
       {"rocksdb.compression", false,
@@ -591,15 +592,10 @@ void Config::initFieldCallback() {
           {"semi-sync-enable", 
             [](Server* srv, [[maybe_unused]] const std::string &k, const std::string& v) -> Status {
               if (!srv) return Status::OK();
-              if (!ReplSemiSyncMaster::GetInstance().InitDone()) return Status::OK();
+              ReplSemiSyncMaster& instance = ReplSemiSyncMaster::GetInstance();
+              if (!instance.InitDone()) return Status::OK();
 
-              int result = 0;
-              if (v == "yes") {
-                result = ReplSemiSyncMaster::GetInstance().EnableMaster();
-              } else {
-                result = ReplSemiSyncMaster::GetInstance().DisableMaster();
-              }
-              
+              int result = v == "yes" ? instance.EnableMaster() : instance.DisableMaster();
               if (result == 0)
                 return Status::OK();
               else
@@ -608,15 +604,24 @@ void Config::initFieldCallback() {
           {"semi-sync-wait-for-slave-count", 
             [this](Server* srv, [[maybe_unused]] const std::string &k, [[maybe_unused]] const std::string& v) -> Status {
               if (!srv) return Status::OK();
-              if (!ReplSemiSyncMaster::GetInstance().InitDone()) return Status::OK();
+              ReplSemiSyncMaster& instance = ReplSemiSyncMaster::GetInstance();
+              if (!instance.InitDone()) return Status::OK();
 
-              auto set_result = ReplSemiSyncMaster::GetInstance().SetWaitSlaveCount(semi_sync_wait_for_slave_count);
+              auto set_result = instance.SetWaitSlaveCount(semi_sync_wait_for_slave_count);
               if (set_result)
                 return Status::OK();
               else
                 return {Status::NotOK, "Failed to set the semi sync slave count"};
             }},
+          {"semi-sync-auto-fall-back", 
+            [](Server* srv, [[maybe_unused]] const std::string &k, const std::string& v) -> Status {
+              if (!srv) return Status::OK();
+              ReplSemiSyncMaster& instance = ReplSemiSyncMaster::GetInstance();
+              if (!instance.InitDone()) return Status::OK();
 
+              instance.SetAutoFallBack(v == "yes");
+              return Status::OK();
+            }},
           {"rocksdb.target_file_size_base",
            [this](Server *srv, const std::string &k, [[maybe_unused]] const std::string &v) -> Status {
              if (!srv) return Status::OK();

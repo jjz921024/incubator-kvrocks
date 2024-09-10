@@ -173,6 +173,7 @@ struct Config {
 
   bool semi_sync_enable = false;
   int semi_sync_wait_for_slave_count = 1;
+  bool semi_sync_auto_fall_back = true;
 
   struct RocksDB {
     int block_size;

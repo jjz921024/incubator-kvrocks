@@ -1054,14 +1054,13 @@ void Server::GetReplicationInfo(std::string *info) {
 }
 
 void Server::GetReplicationSyncInfo(std::string *info) {
-  auto& repl_semisync = ReplSemiSyncMaster::GetInstance();
+  auto& instance = ReplSemiSyncMaster::GetInstance();
+  bool semi_sync_enabled = instance.IsSemiSyncEnabled();
   std::ostringstream string_stream;
-  bool semi_sync_enabled = repl_semisync.GetSemiSyncEnabled();
   string_stream << "# Sync\r\n";
-  string_stream << "type:" << (semi_sync_enabled && repl_semisync.IsOn() ? "semi-sync" : "async") << "\r\n";
+  string_stream << "type:" << (semi_sync_enabled && instance.IsOn() ? "semi-sync" : "async") << "\r\n";
   if (semi_sync_enabled) {
-    string_stream << "wait_for_slave_count:" <<
-      (repl_semisync.IsOn() ? config_->semi_sync_wait_for_slave_count : 0) << "\r\n";
+    string_stream << "wait_for_slave_count:" << config_->semi_sync_wait_for_slave_count << "\r\n";
   }
   *info = string_stream.str();
 }

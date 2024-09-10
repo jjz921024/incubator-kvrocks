@@ -133,8 +133,9 @@ class FeedSlaveThread : public Observable {
  public:
   explicit FeedSlaveThread(Server *srv, redis::Connection *conn, rocksdb::SequenceNumber next_repl_seq)
       : srv_(srv), conn_(conn), next_repl_seq_(next_repl_seq) {
-    RegisterObserver(syncSlaveHandler.get());
-    RegisterObserver(syncStatusHandler.get());
+    // 在各个阶段, 通过event触发到handler
+    RegisterObserver(feedSlaveHandler.get());
+    RegisterObserver(feedStatusHandler.get());
   }
   ~FeedSlaveThread() override = default;
 
@@ -151,8 +152,8 @@ class FeedSlaveThread : public Observable {
   }
 
  private:
-  static const std::unique_ptr<FeedSlaveHandler> syncSlaveHandler;
-  static const std::unique_ptr<FeedStatusHandler> syncStatusHandler;
+  static const std::unique_ptr<FeedSlaveHandler> feedSlaveHandler;
+  static const std::unique_ptr<FeedStatusHandler> feedStatusHandler;
   uint64_t interval_ = 0;
   std::atomic<bool> stop_ = false;
   std::atomic<bool> pause_ = false;

@@ -57,9 +57,11 @@
 
 thread_local bool REP_SEMI_SYNC_SLAVE = false;
 
-const std::unique_ptr<FeedSlaveHandler> FeedSlaveThread::syncSlaveHandler = std::make_unique<FeedSlaveHandler>();
-const std::unique_ptr<FeedStatusHandler> FeedSlaveThread::syncStatusHandler = std::make_unique<FeedStatusHandler>();
+// 全局维护2个处理事件的handler
+const std::unique_ptr<FeedSlaveHandler> FeedSlaveThread::feedSlaveHandler = std::make_unique<FeedSlaveHandler>();
+const std::unique_ptr<FeedStatusHandler> FeedSlaveThread::feedStatusHandler = std::make_unique<FeedStatusHandler>();
 
+// 从节点开始同步
 void FeedSlaveHandler::transmitStart([[maybe_unused]] Observable const &subject, ObserverEvent const &event) {
   if (REP_SEMI_SYNC_SLAVE) return;
 
@@ -71,15 +73,7 @@ void FeedSlaveHandler::transmitStart([[maybe_unused]] Observable const &subject,
   repl_semi_sync.HandleAck(ev->conn_fd, ev->thread_ptr->GetCurrentReplSeq());
 }
 
-void FeedSlaveHandler::beforeSend([[maybe_unused]] Observable const &subject, [[maybe_unused]] ObserverEvent const &event) {
-
-}
-
-void FeedSlaveHandler::afterSend([[maybe_unused]] Observable const &subject, ObserverEvent const &event) {
-  const auto *ev = dynamic_cast<const AfterSendEvent *>(&event);
-  ReplSemiSyncMaster::GetInstance().HandleAck(ev->conn_fd, ev->sequence_number);
-}
-
+// 从节点结束同步
 void FeedSlaveHandler::transmitEnd([[maybe_unused]] Observable const &subject, ObserverEvent const &event) {
   if (!REP_SEMI_SYNC_SLAVE) return;
 
@@ -89,10 +83,21 @@ void FeedSlaveHandler::transmitEnd([[maybe_unused]] Observable const &subject, O
   repl_semi_sync.RemoveSlave(ev->thread_ptr);
 }
 
+// 节点主从状态变更 TODO: 未触发
 void FeedStatusHandler::syncStatusChange([[maybe_unused]] Observable const &subject, ObserverEvent const &event) {
   const auto *ev = dynamic_cast<const SyncStatusChangeEvent *>(&event);
   ReplSemiSyncMaster &repl_semi_sync = ReplSemiSyncMaster::GetInstance();
   repl_semi_sync.HandleAck(ev->conn_fd, ev->last_sequence_number_end);
+}
+
+// 在 FeedSlaveThread 中
+// 主节点将wal日志同步给从节点前后触发
+void FeedSlaveHandler::beforeSend([[maybe_unused]] Observable const &subject, [[maybe_unused]] ObserverEvent const &event) {
+}
+
+void FeedSlaveHandler::afterSend([[maybe_unused]] Observable const &subject, ObserverEvent const &event) {
+  const auto *ev = dynamic_cast<const AfterSendEvent *>(&event);
+  ReplSemiSyncMaster::GetInstance().HandleAck(ev->conn_fd, ev->sequence_number);
 }
 
 Status FeedSlaveThread::Start() {
@@ -194,10 +199,6 @@ void FeedSlaveThread::loop() {
     }
     updates_in_batches += batch.writeBatchPtr->Count();
 
-    // notify
-    AfterSendEvent ev(conn_->GetFD(), batch.sequence);
-    NotifyObservers(ev);
-
     batches_bulk += redis::BulkString(batch.writeBatchPtr->Data());
     // 1. We must send the first replication batch, as said above.
     // 2. To avoid frequently calling 'write' system call to send replication stream,
@@ -225,6 +226,11 @@ void FeedSlaveThread::loop() {
     }
     curr_seq = batch.sequence + batch.writeBatchPtr->Count();
     next_repl_seq_.store(curr_seq);
+
+    // 发送到从节点后, 更新已同步的seq
+    AfterSendEvent ev(conn_->GetFD(), batch.sequence);
+    NotifyObservers(ev);
+
     while (!IsStopped() && !srv_->storage->WALHasNewData(curr_seq)) {
       Pause(yield_microseconds);
       checkLivenessIfNeed();

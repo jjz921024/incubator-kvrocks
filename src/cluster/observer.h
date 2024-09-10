@@ -47,6 +47,7 @@ class Observable {
 class EventHandler : public Observer {
  public:
   void OnNotify(Observable const& subject, ObserverEvent const& event) override {
+    // 根据typeid触发对应handler的逻辑
     auto find = handlers_.find(std::type_index(typeid(event)));
     if (find != handlers_.end()) {
       find->second(subject, event);

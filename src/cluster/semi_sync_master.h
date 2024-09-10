@@ -25,19 +25,6 @@ struct WaitingNodeComparator {
   }
 };
 
-struct AckInfo {
-  int server_id = 0;
-  uint64_t log_pos = 0;
-  void Reset() {
-    server_id = 0;
-    log_pos = 0;
-  }
-  void Set(int id, uint64_t pos) {
-    server_id = id;
-    log_pos = pos;
-  }
-};
-
 class WaitingNodeManager {
  public:
   WaitingNodeManager();
@@ -50,6 +37,19 @@ class WaitingNodeManager {
 
  private:
   std::set<WaitingNode*, WaitingNodeComparator> waiting_node_list_;
+};
+
+struct AckInfo {
+  int server_id = 0;
+  uint64_t log_pos = 0;
+  void Reset() {
+    server_id = 0;
+    log_pos = 0;
+  }
+  void Set(int id, uint64_t pos) {
+    server_id = id;
+    log_pos = pos;
+  }
 };
 
 class AckContainer {
@@ -83,10 +83,11 @@ class ReplSemiSyncMaster {
     return instance;
   }
   ~ReplSemiSyncMaster();
-  bool InitDone() { return init_done_.load(); }
   int Initalize(Config* config);
-  bool GetSemiSyncEnabled() { return semi_sync_enabled_; }
-  bool IsOn() const { return state_; }
+  
+  bool InitDone() { return init_done_.load(); }
+  bool IsOn() const { return state_.load(); }
+  bool IsSemiSyncEnabled() const { return semi_sync_enabled_.load(); }
   int EnableMaster();
   int DisableMaster();
   void AddSlave(FeedSlaveThread* slave_thread_ptr);
@@ -94,12 +95,12 @@ class ReplSemiSyncMaster {
   bool CommitTrx(uint64_t trx_wait_binlog_pos);
   void HandleAck(int server_id, uint64_t log_file_pos);
   bool SetWaitSlaveCount(uint new_value);
+  void SetAutoFallBack(bool new_value);
+  bool IsAutoFallBack() const { return semi_sync_auto_fall_back_.load(); }
 
  private:
   ReplSemiSyncMaster() {}
-  Config* config_ = nullptr;
   
-  uint semi_sync_wait_for_slave_count_ = 1;
   std::list<FeedSlaveThread*> slave_threads_;
 
   WaitingNodeManager* node_manager_ = nullptr;
@@ -107,14 +108,17 @@ class ReplSemiSyncMaster {
 
   std::mutex lock_binlog_;
   uint64_t wait_file_pos_ = 0;
+  std::atomic<uint64_t> max_handle_sequence_ = {0};
+  
   std::atomic<bool> init_done_ = {false};
-  // whether semi-sync is switched
   std::atomic<bool> state_ = {false};               
+  
   // semi-sync is enabled on the master            
   std::atomic<bool> semi_sync_enabled_ = {false}; 
-  std::atomic<uint64_t> max_handle_sequence_ = {0};
+  uint semi_sync_wait_for_slave_count_ = 1;
+  std::atomic<bool> semi_sync_auto_fall_back_ = {false};
 
-  void setSemiSyncEnabled(bool enabled) { semi_sync_enabled_ = enabled; }
+  void setSemiSyncEnabled(bool enabled) { semi_sync_enabled_.store(enabled); }
   void switchOff();
   void trySwitchOn(uint64_t log_file_pos);
   void reportReplyBinlog(uint64_t log_file_pos);

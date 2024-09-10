@@ -176,6 +176,19 @@ const AckInfo* AckContainer::Insert(int server_id, uint64_t log_file_pos) {
   return ret_ack;
 }
 
+int ReplSemiSyncMaster::Initalize(Config* config) {
+  if (init_done_) {
+    return 1;
+  }
+  init_done_ = true;
+  bool set_result = SetWaitSlaveCount(config->semi_sync_wait_for_slave_count);
+  if (!set_result) {
+    LOG(ERROR) << "[semisync] Failed to initialize the semi sync master";
+  }
+  
+  return config->semi_sync_enable ? EnableMaster() : DisableMaster();
+}
+
 ReplSemiSyncMaster::~ReplSemiSyncMaster() {
   delete node_manager_;
   LOG(INFO) << "exec ReplSemiSyncMaster::~ReplSemiSyncMaster";
@@ -185,7 +198,7 @@ int ReplSemiSyncMaster::EnableMaster() {
   std::lock_guard<std::mutex> lock(lock_binlog_);
 
   int result = 0;
-  if (!GetSemiSyncEnabled()) {
+  if (!IsSemiSyncEnabled()) {
     if (node_manager_ == nullptr) node_manager_ = new WaitingNodeManager();
     if (node_manager_ != nullptr) {
       setSemiSyncEnabled(true);
@@ -195,14 +208,14 @@ int ReplSemiSyncMaster::EnableMaster() {
   }
 
   // initialize state
-  state_ = slave_threads_.size() >= semi_sync_wait_for_slave_count_;
+  state_.store(slave_threads_.size() >= semi_sync_wait_for_slave_count_);
   return result;
 }
 
 int ReplSemiSyncMaster::DisableMaster() {
   std::lock_guard<std::mutex> lock(lock_binlog_);
 
-  if (GetSemiSyncEnabled()) {
+  if (IsSemiSyncEnabled()) {
     switchOff();
 
     if (node_manager_) {
@@ -217,24 +230,11 @@ int ReplSemiSyncMaster::DisableMaster() {
   return 0;
 }
 
-int ReplSemiSyncMaster::Initalize(Config* config) {
-  if (init_done_) {
-    return 1;
-  }
-  init_done_ = true;
-  config_ = config;
-  bool set_result = SetWaitSlaveCount(config_->semi_sync_wait_for_slave_count);
-  if (!set_result) {
-    LOG(ERROR) << "[semisync] Failed to initialize the semi sync master";
-  }
-  
-  return config_->semi_sync_enable ? EnableMaster() : DisableMaster();
-}
-
 void ReplSemiSyncMaster::AddSlave(FeedSlaveThread* slave_thread_ptr) {
   std::lock_guard<std::mutex> lock(lock_binlog_);
   if (slave_thread_ptr == nullptr && slave_thread_ptr->GetConn() == nullptr) {
     LOG(ERROR) << "[semisync] Failed to add slave as semi sync one";
+    return;
   }
   slave_threads_.emplace_back(slave_thread_ptr);
 }
@@ -243,11 +243,13 @@ void ReplSemiSyncMaster::RemoveSlave(FeedSlaveThread* slave_thread_ptr) {
   std::lock_guard<std::mutex> lock(lock_binlog_);
   if (slave_thread_ptr == nullptr && slave_thread_ptr->GetConn() == nullptr) {
     LOG(ERROR) << "[semisync] Failed to remove semi sync slave";
+    return;
   }
   slave_threads_.remove(slave_thread_ptr);
-  if (!GetSemiSyncEnabled() || !IsOn()) return;
+  if (!IsSemiSyncEnabled() || !IsOn()) return;
 
-  if (slave_threads_.size() == semi_sync_wait_for_slave_count_ - 1) {
+  if (slave_threads_.size() < semi_sync_wait_for_slave_count_) {
+    LOG(WARNING) << "[semisync] slave less setting count, switch off semi sync";
     switchOff();
   }
 }
@@ -255,13 +257,7 @@ void ReplSemiSyncMaster::RemoveSlave(FeedSlaveThread* slave_thread_ptr) {
 bool ReplSemiSyncMaster::CommitTrx(uint64_t trx_wait_binlog_pos) {
   std::unique_lock<std::mutex> lock(lock_binlog_);
 
-  /* if (!config_->semi_sync_test) {
-    for (auto& slave_thread : slave_threads_) {
-      slave_thread->Wakeup();
-    }
-  } */
-
-  if (!GetSemiSyncEnabled() || !IsOn()) return false;
+  if (!IsSemiSyncEnabled() || !IsOn()) return false;
 
   if (trx_wait_binlog_pos <= wait_file_pos_) {
     return false;
@@ -277,6 +273,7 @@ bool ReplSemiSyncMaster::CommitTrx(uint64_t trx_wait_binlog_pos) {
     return false;
   }
 
+  // TODO: 不阻塞线程
   trx_node->waiters++;
   auto s = trx_node->cond.wait_for(lock, std::chrono::seconds(SEMI_SYNC_WAIT_TIMEOUT));
   trx_node->waiters--;
@@ -284,7 +281,10 @@ bool ReplSemiSyncMaster::CommitTrx(uint64_t trx_wait_binlog_pos) {
     LOG(ERROR) << "[semisync] Semi sync waits 10s, switch all the slaves to async";
     switchOff();
   }
-  if (max_handle_sequence_.load() < trx_wait_binlog_pos) max_handle_sequence_ = trx_wait_binlog_pos;
+
+  if (max_handle_sequence_.load() < trx_wait_binlog_pos) {
+    max_handle_sequence_.store(trx_wait_binlog_pos);
+  }
 
   if (trx_node->waiters == 0) {
     node_manager_->ClearWaitingNodes(trx_wait_binlog_pos);
@@ -295,6 +295,7 @@ bool ReplSemiSyncMaster::CommitTrx(uint64_t trx_wait_binlog_pos) {
 
 void ReplSemiSyncMaster::HandleAck(int server_id, uint64_t log_file_pos) {
   std::lock_guard<std::mutex> lock(lock_binlog_);
+  // TODO: 重构
   if (semi_sync_wait_for_slave_count_ == 1) {
     reportReplyBinlog(log_file_pos);
   } else {
@@ -305,22 +306,17 @@ void ReplSemiSyncMaster::HandleAck(int server_id, uint64_t log_file_pos) {
   }
 }
 
-void ReplSemiSyncMaster::reportReplyBinlog(uint64_t log_file_pos) {
-  if (!GetSemiSyncEnabled()) return;
-
-  if (!IsOn()) {
-    trySwitchOn(log_file_pos);
-  }
-
-  node_manager_->SignalWaitingNodesUpTo(log_file_pos);
-  if (log_file_pos > wait_file_pos_) wait_file_pos_ = log_file_pos;
-}
-
-bool ReplSemiSyncMaster::SetWaitSlaveCount(uint new_value) {
-  const AckInfo* ackinfo = nullptr;
+bool ReplSemiSyncMaster::SetWaitSlaveCount(uint new_value) {  
   std::lock_guard<std::mutex> lock(lock_binlog_);
-  LOG(INFO) << "[semisync] Try to set slave count " << new_value;
+  std::ostringstream log;
+  log << "[semisync] Try to set slave count " << new_value;
+  if (new_value == 0) {
+    new_value = slave_threads_.size() / 2 + 1;
+    log << ", quorum is: " << new_value;
+  }
+  LOG(INFO) << log.str();
 
+  const AckInfo* ackinfo = nullptr;
   bool resize_result = ack_container_.Resize(new_value, &ackinfo);
   if (resize_result) {
     if (ackinfo != nullptr) {
@@ -330,20 +326,39 @@ bool ReplSemiSyncMaster::SetWaitSlaveCount(uint new_value) {
   }
 
   LOG(INFO) << "[semisync] Finish setting slave count";
-
   return resize_result;
+}
+
+void ReplSemiSyncMaster::SetAutoFallBack(bool new_value) {
+  std::lock_guard<std::mutex> lock(lock_binlog_);
+  LOG(INFO) << "[semisync] set auto fall back " << new_value;
+  semi_sync_auto_fall_back_.store(new_value);
+}
+
+void ReplSemiSyncMaster::reportReplyBinlog(uint64_t log_file_pos) {
+  if (!IsSemiSyncEnabled()) return;
+
+  // 若主从同步状态为off时,
+  // 每次从节点ack后，根据seq判断是否可以恢复
+  if (!IsOn()) {
+    LOG(INFO) << "[semisync] try to switch on semi sync";
+    trySwitchOn(log_file_pos);
+  }
+
+  node_manager_->SignalWaitingNodesUpTo(log_file_pos);
+  if (log_file_pos > wait_file_pos_) wait_file_pos_ = log_file_pos;
 }
 
 void ReplSemiSyncMaster::trySwitchOn(uint64_t log_file_pos) {
   if (semi_sync_enabled_) {
     if (log_file_pos > max_handle_sequence_) {
-      state_ = true;
+      state_.store(true);
     }
   }
 }
 
 void ReplSemiSyncMaster::switchOff() {
-  state_ = false;
+  state_.store(false);
   wait_file_pos_ = 0;
   max_handle_sequence_ = 0;
 
