@@ -57,9 +57,8 @@
 
 thread_local bool REP_SEMI_SYNC_SLAVE = false;
 
-// 全局维护2个处理事件的handler
+// 所有feedSlaveThread共享一个handler
 const std::unique_ptr<FeedSlaveHandler> FeedSlaveThread::feedSlaveHandler = std::make_unique<FeedSlaveHandler>();
-const std::unique_ptr<FeedStatusHandler> FeedSlaveThread::feedStatusHandler = std::make_unique<FeedStatusHandler>();
 
 // 从节点开始同步
 void FeedSlaveHandler::transmitStart([[maybe_unused]] Observable const &subject, ObserverEvent const &event) {
@@ -81,13 +80,6 @@ void FeedSlaveHandler::transmitEnd([[maybe_unused]] Observable const &subject, O
   ReplSemiSyncMaster &repl_semi_sync = ReplSemiSyncMaster::GetInstance();
   const auto *ev = dynamic_cast<const TransmitEndEvent *>(&event);
   repl_semi_sync.RemoveSlave(ev->thread_ptr);
-}
-
-// 节点主从状态变更 TODO: 未触发
-void FeedStatusHandler::syncStatusChange([[maybe_unused]] Observable const &subject, ObserverEvent const &event) {
-  const auto *ev = dynamic_cast<const SyncStatusChangeEvent *>(&event);
-  ReplSemiSyncMaster &repl_semi_sync = ReplSemiSyncMaster::GetInstance();
-  repl_semi_sync.HandleAck(ev->conn_fd, ev->last_sequence_number_end);
 }
 
 // 在 FeedSlaveThread 中

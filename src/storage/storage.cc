@@ -92,8 +92,7 @@ Storage::Storage(Config *config)
   Metadata::InitVersionCounter();
   SetWriteOptions(config->rocks_db.write_options);
 
-  ReplSemiSyncMaster& instance = ReplSemiSyncMaster::GetInstance();
-  instance.Initalize(config);
+  // 监听afterCommit事件, 在收到指定ack后释放阻塞的请求
   RegisterObserver(handler_.get());
 }
 
@@ -709,7 +708,7 @@ rocksdb::Status Storage::Write(engine::Context &ctx, const rocksdb::WriteOptions
 
   ReplSemiSyncMaster& instance = ReplSemiSyncMaster::GetInstance();
   bool is_enabled = instance.IsSemiSyncEnabled();
-  if (is_enabled && !instance.IsOn() && !instance.IsAutoFallBack()) {
+  if (is_enabled && !instance.IsOn() && !instance.IsAutoFailBack()) {
     return rocksdb::Status::Incomplete("not enough replica node for semi sync");
   }
 

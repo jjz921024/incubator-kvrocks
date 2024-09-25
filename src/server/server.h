@@ -175,10 +175,31 @@ class ServerLogData {
 class SlotImport;
 class SlotMigrator;
 
-class Server {
+class StatusChangeEvent : public ObserverEvent {
+ public:
+  explicit StatusChangeEvent(bool is_master) : ObserverEvent(), is_master(is_master) {}
+  StatusChangeEvent(bool is_master, int wait_slave_count) : ObserverEvent(), 
+                        is_master(is_master), wait_slave_count(wait_slave_count) {}
+  bool is_master;
+  int wait_slave_count;
+};
+
+class ServerStatusHandler : public EventHandler {
+ public:
+  ServerStatusHandler() : EventHandler() {
+    RegisterEventHandler<StatusChangeEvent>([](auto &&p_h1, auto &&p_h2) {
+      statusChange(std::forward<decltype(p_h1)>(p_h1), std::forward<decltype(p_h2)>(p_h2));
+    });
+  }
+
+ private:
+  static void statusChange(Observable const &subject, ObserverEvent const &event);
+};
+
+class Server : public Observable {
  public:
   explicit Server(engine::Storage *storage, Config *config);
-  ~Server();
+  ~Server() override;
 
   Server(const Server &) = delete;
   Server &operator=(const Server &) = delete;
@@ -407,4 +428,7 @@ class Server {
   std::atomic<uint16_t> cursor_counter_ = {0};
   using CursorDictType = std::array<CursorDictElement, CURSOR_DICT_SIZE>;
   std::unique_ptr<CursorDictType> cursor_dict_;
+
+  // semi sync
+  std::unique_ptr<ServerStatusHandler> handler_ = std::make_unique<ServerStatusHandler>();
 };

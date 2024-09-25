@@ -83,20 +83,20 @@ class ReplSemiSyncMaster {
     return instance;
   }
   ~ReplSemiSyncMaster();
-  int Initalize(Config* config);
   
-  bool InitDone() { return init_done_.load(); }
   bool IsOn() const { return state_.load(); }
-  bool IsSemiSyncEnabled() const { return semi_sync_enabled_.load(); }
-  int EnableMaster();
-  int DisableMaster();
+  bool IsSemiSyncEnabled() const { return semi_sync_enable_.load(); }
+  void SetSemiSyncEnabled(bool enable) { semi_sync_enable_.store(enable); }
+  void SetAutoFailBack(bool enable) { semi_sync_auto_fail_back_.store(enable); };
+  bool IsAutoFailBack() const { return semi_sync_auto_fail_back_.load(); }
+
+  int StartSemiSyncMaster(int wait_slave_count);
+  int CloseSemiSyncMaster();
   void AddSlave(FeedSlaveThread* slave_thread_ptr);
   void RemoveSlave(FeedSlaveThread* slave_thread_ptr);
   bool CommitTrx(uint64_t trx_wait_binlog_pos);
   void HandleAck(int server_id, uint64_t log_file_pos);
-  bool SetWaitSlaveCount(uint new_value);
-  void SetAutoFallBack(bool new_value);
-  bool IsAutoFallBack() const { return semi_sync_auto_fall_back_.load(); }
+  bool SetWaitSlaveCount(uint count);
 
  private:
   ReplSemiSyncMaster() {}
@@ -107,21 +107,23 @@ class ReplSemiSyncMaster {
   AckContainer ack_container_;
 
   std::mutex lock_binlog_;
-  uint64_t wait_file_pos_ = 0;
+  
+  // master已经commit的最大的seq, 每次write db时更新
   std::atomic<uint64_t> max_handle_sequence_ = {0};
+  // 最大的slave ack的seq, 每次ack时更新
+  std::atomic<uint64_t> wait_file_pos_ = {0};
   
-  std::atomic<bool> init_done_ = {false};
-  std::atomic<bool> state_ = {false};               
-  
-  // semi-sync is enabled on the master            
-  std::atomic<bool> semi_sync_enabled_ = {false}; 
-  uint semi_sync_wait_for_slave_count_ = 1;
-  std::atomic<bool> semi_sync_auto_fall_back_ = {false};
+  // 半同步是否正在运行
+  std::atomic<bool> state_ = {false};
+  // 是否开启半同步功能, 从节点上即使enable也不会运行   
+  std::atomic<bool> semi_sync_enable_ = {false};
+  std::atomic<bool> semi_sync_auto_fail_back_ = {false};
 
-  void setSemiSyncEnabled(bool enabled) { semi_sync_enabled_.store(enabled); }
-  void switchOff();
-  void trySwitchOn(uint64_t log_file_pos);
+  uint wait_slave_count_ = 1;
+
   void reportReplyBinlog(uint64_t log_file_pos);
+  bool setWaitSlaveCount(uint count);
+  void switchOff();
 };
 
 // semisync_master

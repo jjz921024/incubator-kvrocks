@@ -53,6 +53,15 @@
 #include "version.h"
 #include "worker.h"
 
+// 节点主从状态变更
+void ServerStatusHandler::statusChange([[maybe_unused]] Observable const &subject, ObserverEvent const &event) {
+  const auto *ev = dynamic_cast<const StatusChangeEvent *>(&event);
+  ReplSemiSyncMaster &repl_semi_sync = ReplSemiSyncMaster::GetInstance();
+  int result = ev->is_master ? repl_semi_sync.StartSemiSyncMaster(ev->wait_slave_count) : repl_semi_sync.CloseSemiSyncMaster();
+  LOG(WARNING) << "[semisync] status change: " << (ev->is_master ? "master" : "slave") 
+               << ", result: " << result;
+}
+
 Server::Server(engine::Storage *storage, Config *config)
     : storage(storage),
       indexer(storage),
@@ -105,6 +114,9 @@ Server::Server(engine::Storage *storage, Config *config)
   slow_log_.SetMaxEntries(config->slowlog_max_len);
   perf_log_.SetMaxEntries(config->profiling_sample_record_max_len);
   lua_ = lua::CreateState(this);
+
+  // 注册监听节点状态变化的handler
+  RegisterObserver(handler_.get());
 }
 
 Server::~Server() {
@@ -156,6 +168,18 @@ Status Server::Start() {
     if (!s.IsOK()) {
       return s.Prefixed("failed to shift replication id");
     }
+  }
+
+  // 根据配置初始化半同步配置
+  auto& instance = ReplSemiSyncMaster::GetInstance();
+  instance.SetSemiSyncEnabled(config_->semi_sync_enable);
+  instance.SetAutoFailBack(config_->semi_sync_auto_fail_back);
+
+  // master节点启动时需手动触发
+  if (!IsSlave()) {
+    StatusChangeEvent ev(true);
+    ev.wait_slave_count = config_->semi_sync_wait_for_slave_count;
+    NotifyObservers(ev);
   }
 
   if (!config_->cluster_enabled) {
@@ -293,6 +317,10 @@ Status Server::AddMaster(const std::string &host, uint32_t port, bool force_reco
     master_host_ = host;
     master_port_ = port;
     config_->SetMaster(host, port);
+
+    // 触发节点状态变为slave事件
+    StatusChangeEvent ev(false);
+    NotifyObservers(ev);
   } else {
     replication_thread_ = nullptr;
   }
@@ -310,6 +338,11 @@ Status Server::RemoveMaster() {
       replication_thread_->Stop();
       replication_thread_ = nullptr;
     }
+    
+    // 触发节点状态变为master事件
+    StatusChangeEvent ev(true, config_->semi_sync_wait_for_slave_count);
+    NotifyObservers(ev);
+
     engine::Context ctx(storage);
     return storage->ShiftReplId(ctx);
   }
@@ -1055,13 +1088,12 @@ void Server::GetReplicationInfo(std::string *info) {
 
 void Server::GetReplicationSyncInfo(std::string *info) {
   auto& instance = ReplSemiSyncMaster::GetInstance();
-  bool semi_sync_enabled = instance.IsSemiSyncEnabled();
   std::ostringstream string_stream;
   string_stream << "# Sync\r\n";
-  string_stream << "type:" << (semi_sync_enabled && instance.IsOn() ? "semi-sync" : "async") << "\r\n";
-  if (semi_sync_enabled) {
-    string_stream << "wait_for_slave_count:" << config_->semi_sync_wait_for_slave_count << "\r\n";
-  }
+  string_stream << "status:" << (instance.IsOn() ? "semi-sync" : "async") << "\r\n";
+  string_stream << "semi_sync_enable:" << (instance.IsSemiSyncEnabled() ? "true" : "false") << "\r\n";
+  string_stream << "wait_for_slave_count:" << config_->semi_sync_wait_for_slave_count << "\r\n";
+  string_stream << "auto_fail_back:" << (instance.IsAutoFailBack() ? "true" : "false") << "\r\n";
   *info = string_stream.str();
 }
 

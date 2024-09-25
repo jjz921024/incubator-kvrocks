@@ -86,13 +86,6 @@ class TransmitEndEvent : public ObserverEvent {
   FeedSlaveThread *thread_ptr;
 };
 
-class SyncStatusChangeEvent : public ObserverEvent {
- public:
-  SyncStatusChangeEvent() : ObserverEvent() {}
-  int conn_fd = 0;
-  uint64_t last_sequence_number_end = 0;
-};
-
 class FeedSlaveHandler : public EventHandler {
  public:
   FeedSlaveHandler() : EventHandler() {
@@ -117,25 +110,12 @@ class FeedSlaveHandler : public EventHandler {
   static void transmitEnd(Observable const &subject, ObserverEvent const &event);
 };
 
-class FeedStatusHandler : public EventHandler {
- public:
-  FeedStatusHandler() : EventHandler() {
-    RegisterEventHandler<SyncStatusChangeEvent>([](auto &&p_h1, auto &&p_h2) {
-      syncStatusChange(std::forward<decltype(p_h1)>(p_h1), std::forward<decltype(p_h2)>(p_h2));
-    });
-  }
-
- private:
-  static void syncStatusChange(Observable const &subject, ObserverEvent const &event);
-};
-
 class FeedSlaveThread : public Observable {
  public:
   explicit FeedSlaveThread(Server *srv, redis::Connection *conn, rocksdb::SequenceNumber next_repl_seq)
       : srv_(srv), conn_(conn), next_repl_seq_(next_repl_seq) {
     // 在各个阶段, 通过event触发到handler
     RegisterObserver(feedSlaveHandler.get());
-    RegisterObserver(feedStatusHandler.get());
   }
   ~FeedSlaveThread() override = default;
 
@@ -153,7 +133,6 @@ class FeedSlaveThread : public Observable {
 
  private:
   static const std::unique_ptr<FeedSlaveHandler> feedSlaveHandler;
-  static const std::unique_ptr<FeedStatusHandler> feedStatusHandler;
   uint64_t interval_ = 0;
   std::atomic<bool> stop_ = false;
   std::atomic<bool> pause_ = false;
