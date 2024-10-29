@@ -11,6 +11,7 @@ WaitingNodeManager::~WaitingNodeManager() {
   waiting_node_list_.clear();
 }
 
+// 每次write db后commit seq, 
 bool WaitingNodeManager::InsertWaitingNode(uint64_t log_file_pos) {
   auto* ins_node = new WaitingNode();
   ins_node->log_pos = log_file_pos;
@@ -19,6 +20,8 @@ bool WaitingNodeManager::InsertWaitingNode(uint64_t log_file_pos) {
   if (waiting_node_list_.empty()) {
     is_insert = true;
   } else {
+    // list中最后一个节点的seq也小于当前seq
+    // 表明有多个worker线程在等待
     auto& last_node = *(--waiting_node_list_.end());
     if (last_node->log_pos < log_file_pos) {
       is_insert = true;
@@ -194,7 +197,9 @@ int ReplSemiSyncMaster::StartSemiSyncMaster(int wait_slave_count) {
   }
 
   // 判断slave节点数是否满足
-  state_.store(slave_threads_.size() >= wait_slave_count_);
+  bool meet_quorum = slave_threads_.size() >= wait_slave_count_;
+  LOG(INFO) << "[semisync] switch semi sync state to: " << meet_quorum;
+  state_.store(meet_quorum);
   return 0;
 }
 
@@ -218,6 +223,13 @@ void ReplSemiSyncMaster::AddSlave(FeedSlaveThread* slave_thread_ptr) {
     return;
   }
   slave_threads_.emplace_back(slave_thread_ptr);
+
+  if (IsSemiSyncEnabled() && !IsOn()) {
+    bool meet_quorum = slave_threads_.size() >= wait_slave_count_;
+    LOG(INFO) << "[semisync] switch semi sync state to: " << meet_quorum;
+    state_.store(meet_quorum);
+  }
+  // TODO: 调整quorum
 }
 
 void ReplSemiSyncMaster::RemoveSlave(FeedSlaveThread* slave_thread_ptr) {
@@ -234,6 +246,7 @@ void ReplSemiSyncMaster::RemoveSlave(FeedSlaveThread* slave_thread_ptr) {
     LOG(WARNING) << "[semisync] Slave count less than expected, switch off semi sync";
     switchOff();
   }
+  // TODO: 调整quorum
 }
 
 bool ReplSemiSyncMaster::CommitTrx(uint64_t trx_wait_binlog_pos) {
@@ -319,10 +332,11 @@ void ReplSemiSyncMaster::reportReplyBinlog(uint64_t log_file_pos) {
   if (!IsSemiSyncEnabled()) return;
 
   // 若主从同步状态为off时,
-  // 每次从节点ack后，根据seq判断是否可以恢复
+  // 每次从节点ack后，根据ack seq是否大于commit seq判断是否可以恢复
   if (!IsOn() && log_file_pos > max_handle_sequence_.load()) {
-    LOG(INFO) << "[semisync] try to switch on semi sync";
-    state_.store(true);
+    bool meet_quorum = slave_threads_.size() >= wait_slave_count_;
+    LOG(INFO) << "[semisync] switch semi sync state to: " << meet_quorum;
+    state_.store(meet_quorum);
   }
 
   node_manager_->SignalWaitingNodesUpTo(log_file_pos);
