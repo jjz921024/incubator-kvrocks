@@ -83,8 +83,7 @@ class CommandHStrlen : public Commander {
     if (!s.ok() && !s.IsNotFound()) {
       return {Status::RedisExecErr, s.ToString()};
     }
-
-    *output = redis::Integer(static_cast<int>(value.size()));
+    *output = s.IsNotFound() ? redis::Integer(0) : redis::Integer(static_cast<int>(value.size()));
     return Status::OK();
   }
 };
