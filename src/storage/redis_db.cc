@@ -97,20 +97,7 @@ rocksdb::Status Database::GetMetadata(engine::Context &ctx, RedisTypes types, co
   *rest = *raw_value;
   if (!s.ok()) return s;
 
-  s = ParseMetadataWithStats(types, rest, metadata);
-  if (!s.ok()) return s;
-
-  // if type is hash, we still need to check if the all of fields expired.
-  if (metadata->Type() == kRedisHash) {
-    HashMetadata hash_metadata(false);
-    s = hash_metadata.Decode(*raw_value);
-    if (!s.ok()) return s;
-    redis::Hash hash_db(storage_, namespace_);
-    if (!hash_db.ExistValidField(ctx, ns_key, hash_metadata)) {
-      return rocksdb::Status::NotFound("no element found");
-    }
-  }
-  return rocksdb::Status::OK();
+  return ParseMetadataWithStats(types, rest, metadata);
 }
 
 rocksdb::Status Database::GetRawMetadata(engine::Context &ctx, const Slice &ns_key, std::string *bytes) {
@@ -231,7 +218,7 @@ rocksdb::Status Database::MDel(engine::Context &ctx, const std::vector<Slice> &k
       redis::Hash hash_db(storage_, namespace_);
       if (hash_db.ExistValidField(ctx, slice_keys[i], hash_metadata)) {
         if (!s.ok()) return s;
-    *deleted_cnt += 1;
+        *deleted_cnt += 1;
       }
     } else {
       *deleted_cnt += 1;
