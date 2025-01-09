@@ -301,8 +301,13 @@ rocksdb::Status Hash::MSet(engine::Context &ctx, const Slice &user_key, const st
   *added_cnt = 0;
   std::string ns_key = AppendNamespacePrefix(user_key);
 
+  std::string raw_value;
+  auto s = Database::GetRawMetadata(ctx, ns_key, &raw_value);
+  if (!s.ok() && !s.IsNotFound()) return s;
+
+  Slice rest = raw_value;
   HashMetadata metadata;
-  rocksdb::Status s = GetMetadata(ctx, ns_key, &metadata);
+  s = ParseMetadataWithStats({kRedisHash}, &rest, &metadata);
   if (!s.ok() && !s.IsNotFound()) return s;
 
   // For avoid affect existing data, we only encode ttl of field

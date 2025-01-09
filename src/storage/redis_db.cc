@@ -231,7 +231,7 @@ rocksdb::Status Database::MDel(engine::Context &ctx, const std::vector<Slice> &k
       redis::Hash hash_db(storage_, namespace_);
       if (hash_db.ExistValidField(ctx, slice_keys[i], hash_metadata)) {
         if (!s.ok()) return s;
-    *deleted_cnt += 1;
+        *deleted_cnt += 1;
       }
     } else {
       *deleted_cnt += 1;

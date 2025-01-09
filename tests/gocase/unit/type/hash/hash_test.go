@@ -1031,7 +1031,7 @@ func TestHashFieldExpiration(t *testing.T) {
 		require.Equal(t, int64(0), rdb.HDel(ctx, "hfe-key", "f1").Val())
 	})
 
-	t.Run("HFE perist a field of hash", func(t *testing.T) {
+	t.Run("HFE persist a field of hash", func(t *testing.T) {
 		require.NoError(t, rdb.Del(ctx, "hfe-key").Err())
 		require.Equal(t, true, rdb.HMSet(ctx, "hfe-key", "f1", "v1", "f2", "v2").Val())
 		rdb.Do(ctx, "HPEXPIRE", "hfe-key", 100, "FIELDS", 1, "f1")
