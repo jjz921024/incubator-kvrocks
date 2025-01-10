@@ -270,6 +270,21 @@ rocksdb::Status Database::GetExpireTime(engine::Context &ctx, const Slice &user_
   Metadata metadata(kRedisNone, false);
   auto s = GetMetadata(ctx, RedisTypes::All(), ns_key, &metadata);
   if (!s.ok()) return s;
+
+  if (metadata.Type() == kRedisHash) {
+    std::string value;
+    s = storage_->Get(ctx, ctx.GetReadOptions(), metadata_cf_handle_, ns_key, &value);
+    if (!s.ok()) return s.IsNotFound() ? rocksdb::Status::OK() : s;
+
+    HashMetadata hash_metadata(false);
+    s = hash_metadata.Decode(value);
+    if (!s.ok()) return s;
+    redis::Hash hash_db(storage_, namespace_);
+    if (!hash_db.ExistValidField(ctx, ns_key, hash_metadata)) {
+      return rocksdb::Status::NotFound("no element found");
+    }
+  }
+
   *timestamp = metadata.expire;
 
   return rocksdb::Status::OK();
